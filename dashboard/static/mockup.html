@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-insight dashboard — 视觉 mockup</title>
+<style>
+  :root {
+    --bg:#0b0e13; --panel:#0f1620; --border:#1f3a5a; --border-soft:#16202e;
+    --text:#c9d1d9; --muted:#8b949e; --faint:#5c6675;
+    --blue:#58a6ff; --green:#3fb950; --amber:#f0883e; --red:#f85149; --purple:#bc8cff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+         font-size:13px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1180px; margin:0 auto; padding:24px 20px 60px; }
+  .ribbon { position:fixed; top:12px; right:12px; background:var(--purple); color:#0b0e13;
+            font-weight:700; font-size:11px; padding:3px 10px; border-radius:4px; z-index:10; letter-spacing:.5px; }
+  /* top bar */
+  .topbar { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:14px; flex-wrap:wrap; }
+  .topbar h1 { font-size:18px; margin:0; font-weight:600; }
+  .topbar h1 .sub { color:var(--muted); font-weight:400; font-size:13px; margin-left:8px; }
+  .meta-chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .chip { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:4px 10px; font-size:12px; color:var(--muted); }
+  .chip b { color:var(--text); font-family:var(--mono); font-weight:600; }
+  /* trust */
+  .trust { display:flex; align-items:center; gap:8px; background:rgba(63,185,80,.08); border:1px solid rgba(63,185,80,.4);
+           color:var(--green); padding:8px 14px; border-radius:8px; margin-bottom:18px; font-size:13px; }
+  .trust b { font-family:var(--mono); }
+  /* hero 双联 */
+  .hero { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px 18px; }
+  .card h2 { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin:0 0 4px; font-weight:600; }
+  .card .hint { font-size:11px; color:var(--faint); margin:0 0 12px; }
+  .bigmetric { display:flex; align-items:baseline; gap:10px; margin-bottom:4px; }
+  .bigmetric .num { font-family:var(--mono); font-size:38px; font-weight:700; color:var(--green); line-height:1; }
+  .bigmetric .lab { color:var(--muted); font-size:12px; }
+  .metric-sub { font-family:var(--mono); font-size:11px; color:var(--faint); margin:0 0 14px; }
+  .dist { display:flex; flex-direction:column; gap:7px; }
+  .dist-row { display:grid; grid-template-columns: 140px 1fr 48px; align-items:center; gap:8px; font-size:11px; }
+  .dist-row .name { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:var(--mono); }
+  .bar { height:9px; background:#0b0e13; border-radius:5px; overflow:hidden; border:1px solid var(--border-soft); }
+  .bar > span { display:block; height:100%; border-radius:4px; }
+  .hit-h { background:var(--green); } .hit-m { background:var(--amber); } .hit-l { background:var(--red); }
+  .dist-row .val { font-family:var(--mono); text-align:right; color:var(--text); }
+  .dist-row .tailtag { color:var(--amber); font-size:10px; }
+  .plan3-card { border-style:dashed; display:flex; flex-direction:column; }
+  .plan3-body { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px;
+                text-align:center; padding:14px 10px; color:var(--faint); }
+  .plan3-icon { font-size:28px; opacity:.55; }
+  .tag { display:inline-block; font-size:10px; font-weight:600; letter-spacing:.5px; padding:2px 9px; border-radius:10px; }
+  .tag.plan3 { background:rgba(188,140,255,.15); color:var(--purple); border:1px solid rgba(188,140,255,.4); }
+  .plan3-note { font-size:11px; color:var(--faint); max-width:280px; line-height:1.55; margin:0; }
+  /* table */
+  .sec-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; flex-wrap:wrap; }
+  .sec-head h2 { font-size:13px; margin:0; font-weight:600; }
+  .sec-head .note { font-size:11px; color:var(--faint); }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  thead th { text-align:left; padding:8px 10px; color:var(--muted); font-weight:600; font-size:11px;
+             text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--border); white-space:nowrap; cursor:pointer; }
+  thead th.num, td.num { text-align:right; font-family:var(--mono); }
+  thead th .sort { color:var(--blue); margin-left:2px; }
+  tbody td { padding:7px 10px; border-bottom:1px solid var(--border-soft); }
+  tbody tr:hover { background:rgba(88,166,255,.05); }
+  .sess { font-family:var(--mono); font-size:11px; }
+  .sess .sid { color:var(--faint); }
+  .cache { display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); }
+  .cache .cbar { width:46px; height:6px; background:#0b0e13; border-radius:3px; overflow:hidden; border:1px solid var(--border-soft); display:inline-block; }
+  .cache .cbar > span { display:block; height:100%; }
+  .ok { color:var(--green); } .mid { color:var(--amber); } .lo { color:var(--red); }
+  tr.spotlight td { background:rgba(240,136,62,.07); }
+  tr.spotlight td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+  .spot-tag { font-size:10px; color:var(--amber); margin-left:6px; }
+  .pill { font-size:10px; padding:1px 8px; border-radius:9px; background:rgba(188,140,255,.12);
+          color:var(--purple); border:1px solid rgba(188,140,255,.3); font-family:var(--sans); white-space:nowrap; }
+  .badge { font-weight:700; }
+  .more td { text-align:center; color:var(--faint); font-style:italic; padding:10px; }
+  /* lower */
+  .lower { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .topo-edge { display:grid; grid-template-columns: 1fr 14px 1fr 52px; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--border-soft); font-size:12px; }
+  .topo-edge:last-child { border-bottom:none; }
+  .topo-edge .p { color:var(--blue); font-family:var(--mono); text-align:right; }
+  .topo-edge .arr { color:var(--faint); text-align:center; }
+  .topo-edge .c { color:var(--text); font-family:var(--mono); }
+  .topo-edge .cnt { text-align:right; color:var(--muted); font-family:var(--mono); }
+  footer { margin-top:26px; font-size:11px; color:var(--faint); line-height:1.7; border-top:1px solid var(--border-soft); padding-top:12px; }
+  footer code { font-family:var(--mono); color:var(--muted); }
+  @media (max-width:780px){ .hero,.lower{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="ribbon">MOCKUP · 样式预览（示例数据）</div>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>agent-insight <span class="sub">fleet 总览</span></h1>
+    <div class="meta-chips">
+      <span class="chip">mode <b>B · scan-projects</b></span>
+      <span class="chip">sessions <b>17</b></span>
+      <span class="chip">spawns <b>719</b></span>
+      <span class="chip">⟳ refresh</span>
+    </div>
+  </div>
+
+  <div class="trust">✓ all consistent — <b>0</b> violating sessions / <b>719</b> spawns · scanConsistency</div>
+
+  <div class="hero">
+    <div class="card">
+      <h2>cache 经济学 · 省钱</h2>
+      <p class="hint">严格 input 侧命中率 = cacheRead / (cacheRead + input + cacheCreation)</p>
+      <div class="bigmetric"><span class="num">95.5%</span><span class="lab">fleet cache hit（input-side）</span></div>
+      <p class="metric-sub">total 41,482,847 · cacheRead 37,833,988 · 全价 input 1,763,606</p>
+      <div class="dist">
+        <div class="dist-row"><span class="name">driver-dev</span><span class="bar"><span class="hit-h" style="width:92.9%"></span></span><span class="val ok">92.9%</span></div>
+        <div class="dist-row"><span class="name">driver</span><span class="bar"><span class="hit-h" style="width:92.4%"></span></span><span class="val ok">92.4%</span></div>
+        <div class="dist-row"><span class="name">driver-experiment</span><span class="bar"><span class="hit-h" style="width:92.2%"></span></span><span class="val ok">92.2%</span></div>
+        <div class="dist-row"><span class="name">…13 more</span><span class="bar"><span class="hit-h" style="width:90%"></span></span><span class="val ok">~90%</span></div>
+        <div class="dist-row"><span class="name">project-analyzer</span><span class="bar"><span class="hit-m" style="width:76.3%"></span></span><span class="val mid">76.3% <span class="tailtag">尾部</span></span></div>
+      </div>
+      <p class="hint" style="margin-top:12px; margin-bottom:0;">低命中率 outlier = 全价 input 成本靶子 · fleet 命中方差主要在 session 级 76%~93%</p>
+    </div>
+
+    <div class="card plan3-card">
+      <h2>context 压力 · 省空间</h2>
+      <p class="hint">per-session context 峰值（max over turns）</p>
+      <div class="plan3-body">
+        <div class="plan3-icon">📈</div>
+        <span class="tag plan3">数据层（待实现）</span>
+        <p class="plan3-note">逐 turn root context 当前数据层算不出。后续扩到 turn 粒度后，此处显示 per-session 峰值柱 + 逼近 limit / 压缩失败 glyph（正常 / ⚠ / 💥）。</p>
+      </div>
+    </div>
+  </div>
+
+  <section class="card" style="margin-bottom:18px;">
+    <div class="sec-head">
+      <h2>fleet · by-session</h2>
+      <span class="note">点行 → session 编排视图 · 默认 total 降序 · 列头可排序</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>session</th>
+          <th class="num">spawns</th>
+          <th class="num">dur<sub style="font-size:9px;color:var(--faint);">active</sub></th>
+          <th class="num">total <span class="sort">↓</span></th>
+          <th class="num">cache%</th>
+          <th class="num">全价 input</th>
+          <th class="num">ctx peak</th>
+          <th class="num">✓</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="sess">driver-experiment-full-code-gen <span class="sid">a48025d6</span></td>
+          <td class="num">258</td><td class="num">21.9h</td><td class="num">17,607,281</td>
+          <td class="num"><span class="cache"><span class="cbar"><span class="hit-h" style="width:92%"></span></span><span class="ok">92.2%</span></span></td>
+          <td class="num">1,373,368</td><td class="num"><span class="pill">待实现</span></td><td class="num ok badge">✓</td>
+        </tr>
+        <tr>
+          <td class="sess">driver <span class="sid">af77e522</span></td>
+          <td class="num">183</td><td class="num">14.6h</td><td class="num">8,540,671</td>
+          <td class="num"><span class="cache"><span class="cbar"><span class="hit-h" style="width:92%"></span></span><span class="ok">92.4%</span></span></td>
+          <td class="num">649,091</td><td class="num"><span class="pill">待实现</span></td><td class="num ok badge">✓</td>
+        </tr>
+        <tr>
+          <td class="sess">driver-dev <span class="sid">d73f1fe5</span></td>
+          <td class="num">114</td><td class="num">8.7h</td><td class="num">6,506,870</td>
+          <td class="num"><span class="cache"><span class="cbar"><span class="hit-h" style="width:93%"></span></span><span class="ok">92.9%</span></span></td>
+          <td class="num">464,790</td><td class="num"><span class="pill">待实现</span></td><td class="num ok badge">✓</td>
+        </tr>
+        <tr class="spotlight">
+          <td class="sess">project-analyzer <span class="sid">9aa81da2</span><span class="spot-tag">outlier · 低命中</span></td>
+          <td class="num">18</td><td class="num">2.8h</td><td class="num">1,156,310</td>
+          <td class="num"><span class="cache"><span class="cbar"><span class="hit-m" style="width:76%"></span></span><span class="mid">76.3%</span></span></td>
+          <td class="num">273,976</td><td class="num"><span class="pill">待实现</span></td><td class="num ok badge">✓</td>
+        </tr>
+        <tr class="more"><td colspan="8">… 13 more sessions（点 session 名进 session 编排）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="lower">
+    <section class="card">
+      <div class="sec-head"><h2>by-skill 切面</h2><span class="note">零 token · 活跃度</span></div>
+      <table>
+        <thead><tr><th>skill</th><th class="num">calls</th><th class="num">sessions</th><th>caller types</th></tr></thead>
+        <tbody>
+          <tr><td>superpowers:brainstorming</td><td class="num">42</td><td class="num">8</td><td style="color:var(--muted);font-size:11px;">orchestrator ×42</td></tr>
+          <tr><td>superpowers:writing-plans</td><td class="num">28</td><td class="num">6</td><td style="color:var(--muted);font-size:11px;">orchestrator ×28</td></tr>
+          <tr><td>claude-api</td><td class="num">19</td><td class="num">5</td><td style="color:var(--muted);font-size:11px;">Explore ×12, orchestrator ×7</td></tr>
+          <tr><td>superpowers:subagent-driven-development</td><td class="num">15</td><td class="num">4</td><td style="color:var(--muted);font-size:11px;">orchestrator ×15</td></tr>
+          <tr class="more"><td colspan="4">… 6 more skills</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <div class="sec-head"><h2>topology · call graph</h2><span class="note">fleet 合计 719</span></div>
+      <div class="topo-edge"><span class="p">orchestrator</span><span class="arr">→</span><span class="c">Explore</span><span class="cnt">×377</span></div>
+      <div class="topo-edge"><span class="p">orchestrator</span><span class="arr">→</span><span class="c">general-purpose</span><span class="cnt">×290</span></div>
+      <div class="topo-edge"><span class="p">orchestrator</span><span class="arr">→</span><span class="c">unknown</span><span class="cnt">×37</span></div>
+      <div class="topo-edge"><span class="p">orchestrator</span><span class="arr">→</span><span class="c">Plan</span><span class="cnt">×8</span></div>
+      <div class="topo-edge"><span class="p">orchestrator</span><span class="arr">→</span><span class="c">claude</span><span class="cnt">×4</span></div>
+      <div class="topo-edge"><span class="p">orchestrator</span><span class="arr">→</span><span class="c">claude-code-guide</span><span class="cnt">×3</span></div>
+    </section>
+  </div>
+
+  <footer>
+    mockup · 示例数据（真值由 <code>analyze.py --json</code> 产）· dark 色板（无 CDN / 自包含）<br>
+    <code>fleet 总览</code> 已落地 · <code>session / spawn / turn</code> 视图 + context 半边 / ctx peak = 数据层边界（占位不伪造）
+  </footer>
+
+</div>
+</body>
+</html>

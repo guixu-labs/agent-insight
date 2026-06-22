@@ -1,0 +1,20 @@
+{
+  "name": "agent-insight",
+  "description": "通用 agent / subagent 编排可观测性工具。被动 PostToolUse hook 记录 per-subagent token / 时延 / 成败 / Skill 使用 / 命令结果,落滚动 JSONL,自带 reader(读 live JSONL / CC transcript,统一 Event IR)。opt-in、零耦合、只量不动。深而精——完整嵌套深度(depth-3+)token 归因 + spawn 拓扑 + 单一计费核。",
+  "version": "0.1.0",
+  "author": {
+    "name": "agent-insight contributors"
+  },
+  "homepage": "https://github.com/guixu-labs/agent-insight",
+  "repository": "https://github.com/guixu-labs/agent-insight",
+  "license": "MIT",
+  "keywords": [
+    "observability",
+    "subagent",
+    "agent",
+    "token",
+    "telemetry",
+    "claude-code"
+  ],
+  "category": "observability"
+}

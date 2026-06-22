@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/guixu-labs/agent-insight/schema/subagent-call.schema.json",
+  "title": "agent-insight JSONL record (§6)",
+  "description": "agent-insight 插件落盘的 JSONL 记录 schema. 三种 recordType 共享一组字段 + 各自专属字段. 在线 recorder 只落原始事实 (caller / spawned / tokens); parentType / callChain 是离线 reader 从 caller ↔ spawned agentId 匹配派生的视图 (§7 路径A 无状态), 不在线落盘.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "recordType",
+    "timestamp",
+    "runId",
+    "generationId",
+    "projectName",
+    "sessionId",
+    "caller"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "schema 版本"
+    },
+    "recordType": {
+      "type": "string",
+      "enum": ["SubagentCall", "SkillCall", "Command"],
+      "description": "记录类型 = 捕获轨道: Agent / Skill / Bash"
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO8601 本地时区 (+08:00), recorder 落盘时打"
+    },
+    "runId": {
+      "type": "string",
+      "description": "session 内分组 id. Phase 1 默认 = sessionId; live 验收 item8 (UserPromptSubmit) 后可切 user-turn 粒度 (§11.4②). 跨 session 续接靠更高层 generationId 缝合."
+    },
+    "generationId": {
+      "type": "string",
+      "description": "跨 session 续接 id = effective_id (carrier ? carrier : sessionId, §10.1). 一个跨 handoff 的生成多 session 同 generationId."
+    },
+    "carrierSource": {
+      "type": ["string", "null"],
+      "enum": ["env", "handoff-file", null],
+      "description": "carrier 来源诊断: env = AGENTINSIGHT_CARRIER_ID; handoff-file = AGENTINSIGHT_CARRIER_FILE; null = 无 carrier (inert, generationId 退化成 sessionId)."
+    },
+    "projectName": {
+      "type": "string",
+      "description": "优先级: env AGENTINSIGHT_PROJECT > cwd 目录名 > 'default'"
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "CC session_id"
+    },
+    "toolUseId": {
+      "type": ["string", "null"],
+      "description": "tool_use_id; Pre/Post 同值 (F1), 可配对但不再必要"
+    },
+    "caller": {
+      "type": "object",
+      "description": "§7 / F8 调用方归属. 顶层 agent_id: 有 = 子 agent 发起; 缺失 = root 直发.",
+      "required": ["isRoot"],
+      "properties": {
+        "agentId": { "type": ["string", "null"] },
+        "agentType": { "type": ["string", "null"] },
+        "isRoot": {
+          "type": "boolean",
+          "description": "agentId 缺失 = 根调用. parent 角色 'orchestrator' 是此判定的标签, 不是写死的 agent 名 (决策3 零硬编码)."
+        }
+      }
+    },
+    "budgetState": {
+      "type": ["object", "null"],
+      "description": "Phase 3 才算 (§6 动作层 seam); Phase 1 恒 null.",
+      "properties": {
+        "threshold": { "type": "number" },
+        "exceeded": { "type": "boolean" },
+        "pctOfThreshold": { "type": "number" }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "title": "SubagentCallRecord (Agent 轨道 · 核心)",
+      "description": "per-subagent token / 时延 / 成败. 这些不依赖栈, 每事件独立落盘.",
+      "required": ["subagentType", "spawned", "tokens", "durationMs", "resolvedModel", "success"],
+      "properties": {
+        "recordType": { "const": "SubagentCall" },
+        "subagentType": {
+          "type": "string",
+          "description": "tool_input.subagent_type — THE 动态 key (决策3: 拓扑零硬编码, 从数据发现)."
+        },
+        "spawned": {
+          "type": "object",
+          "description": "被 spawn 方. tool_response.agentId / agentType.",
+          "properties": {
+            "agentId": { "type": ["string", "null"] },
+            "agentType": { "type": ["string", "null"] }
+          }
+        },
+        "tokens": {
+          "type": "object",
+          "description": "CC 可达字段. 无 reasoning 拆分但总账自洽 (F4: reasoning ⊂ output_tokens).",
+          "properties": {
+            "input": { "type": ["integer", "null"] },
+            "output": { "type": ["integer", "null"] },
+            "cacheCreation": { "type": ["integer", "null"] },
+            "cacheRead": { "type": ["integer", "null"] },
+            "total": { "type": ["integer", "null"] }
+          }
+        },
+        "durationMs": {
+          "type": ["integer", "null"],
+          "description": "Phase 1 取 tool_response.totalDurationMs (子 agent 内部耗时). 顶层 duration_ms 与之差 32ms 未表征, live 验收厘清取值口径 (§6)."
+        },
+        "resolvedModel": {
+          "type": ["string", "null"],
+          "description": "tool_response.resolvedModel — per-subagent 模型白捡 (F6)."
+        },
+        "success": {
+          "type": "boolean",
+          "description": "status == 'completed'. 失败样本 Phase 0 未测, error-case 形态待 live 补."
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "null (completed) 或 status 原值 (error-case)."
+        }
+      }
+    },
+    {
+      "title": "SkillCallRecord (Skill 轨道 · 零 token)",
+      "description": "哪个 subagent 加载了哪些 capability skill (知识使用轴). 零 token (F3), 只追踪加载、不归因 token 成本.",
+      "required": ["skillName", "success"],
+      "properties": {
+        "recordType": { "const": "SkillCall" },
+        "skillName": {
+          "type": "string",
+          "description": "tool_response.commandName (F3 实证带, 形如 superpowers:executing-plans) 优先; fallback tool_input.skill."
+        },
+        "success": { "type": "boolean" },
+        "tokens": { "type": "null", "description": "恒 null — Skill 零 token (F3)." }
+      }
+    },
+    {
+      "title": "CommandRecord (Bash 轨道 · opt-in 默认关)",
+      "description": "verify / 校验命令的结果邻近信号. F5: payload 无 exit code, 从'二元过/没过'降级为 interrupted + stderr 文本启发式. Bash 高频 × fork-exec 拖慢编排, 故默认关、opt-in (AGENTINSIGHT_BASH=1).",
+      "required": ["command", "interrupted"],
+      "properties": {
+        "recordType": { "const": "Command" },
+        "command": { "type": "string" },
+        "interrupted": { "type": "boolean", "description": "tool_response.interrupted." },
+        "stderr": { "type": "string", "description": "tool_response.stderr — 结果邻近信号文本." },
+        "exitCode": { "type": "null", "description": "恒 null — F5 实证 payload 无 exit code 字段." }
+      }
+    }
+  ]
+}

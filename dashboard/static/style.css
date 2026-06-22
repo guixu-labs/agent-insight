@@ -1,0 +1,391 @@
+/* agent-insight A 形态 · fleet · §8.9 dark 主题 (无 CDN / 自包含) */
+:root {
+  --bg:#0b0e13; --panel:#0f1620; --border:#1f3a5a; --border-soft:#16202e;
+  --text:#c9d1d9; --muted:#8b949e; --faint:#5c6675;
+  --blue:#58a6ff; --green:#3fb950; --amber:#f0883e; --red:#f85149; --purple:#bc8cff;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+       font-size:13px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+.wrap { max-width:1180px; margin:0 auto; padding:24px 20px 60px; }
+.faint { color:var(--faint); }
+
+/* top bar */
+.topbar { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:14px; flex-wrap:wrap; }
+.topbar h1 { font-size:18px; margin:0; font-weight:600; }
+.topbar h1 .sub { color:var(--muted); font-weight:400; font-size:13px; margin-left:8px; }
+.meta-chips { display:flex; gap:8px; flex-wrap:wrap; }
+.chip { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:4px 10px; font-size:12px; color:var(--muted); }
+.chip b { color:var(--text); font-family:var(--mono); font-weight:600; }
+.chip.err { border-color:var(--red); color:var(--red); }
+.chip.warn { border-color:rgba(240,136,62,.55); color:var(--amber); }
+.chip.live { border-color:rgba(63,185,80,.5); color:var(--green); }
+.chip.offline { color:var(--muted); }
+.chip.paused { border-color:rgba(240,136,62,.45); color:var(--amber); }   /* 刷新轴: live-tail 关闭 (顶部 mode chip, ●实时绿 / ⏸暂停橙) */
+.chip.stale { border-color:rgba(139,148,158,.45); color:var(--muted); }   /* 数据静止: live-tail 开但源长期不动 (旧 session 不再活动), muted 灰; 文件恢复下次轮询即转 ●实时 */
+.live-toggle { font:inherit; font-size:12px; color:var(--muted); background:var(--panel);
+  border:1px solid var(--border); border-radius:6px; padding:4px 10px; cursor:pointer;
+  display:inline-flex; align-items:center; gap:6px; }
+.live-toggle:hover { border-color:var(--blue); color:var(--text); }
+.live-toggle .dot { font-size:9px; color:var(--faint); }
+.live-toggle.on { color:var(--text); border-color:rgba(63,185,80,.4); }
+.live-toggle.on .dot { color:var(--green); animation:live-pulse 1.6s ease-in-out infinite; }
+@keyframes live-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+@media (prefers-reduced-motion: reduce) { .live-toggle.on .dot { animation:none; } }
+
+/* src-bar: 运行时数据源切换 (POST /api/source · §8 dashboard) */
+.src-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:16px;
+  padding:8px 12px; background:var(--panel); border:1px solid var(--border-soft); border-radius:8px; }
+.src-bar .src-lab { font-size:12px; color:var(--muted); letter-spacing:.04em; text-transform:uppercase; }
+#source-select, #source-input, #source-apply { font:inherit; font-size:12px; color:var(--text);
+  background:#0a0f16; border:1px solid var(--border); border-radius:6px; }
+#source-select { padding:5px 8px; cursor:pointer; max-width:240px; }
+#source-input { flex:1; min-width:240px; padding:5px 9px; font-family:var(--mono); }
+#source-input:focus { outline:none; border-color:var(--blue); }
+#source-apply { padding:5px 14px; cursor:pointer; color:var(--muted); }
+#source-apply:hover { border-color:var(--blue); color:var(--text); }
+#source-browse { font:inherit; font-size:12px; padding:5px 12px; cursor:pointer; color:var(--muted);
+  background:#0a0f16; border:1px solid var(--border); border-radius:6px; }
+#source-browse:hover { border-color:var(--blue); color:var(--text); }
+
+/* 目录浏览弹层 (§8 运行时切源 · 浏览器 fakepath 铁律 → server /api/browse + 自建弹层, D17) */
+.browse-modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex;
+  align-items:center; justify-content:center; z-index:1000; }
+.browse-box { width:min(640px,92vw); max-height:80vh; display:flex; flex-direction:column;
+  background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.browse-head { display:flex; justify-content:space-between; align-items:center;
+  padding:10px 14px; border-bottom:1px solid var(--border-soft); }
+.browse-title { font-size:13px; color:var(--text); }
+.browse-title .faint { font-size:11px; }
+.browse-x { background:none; border:none; color:var(--muted); font-size:18px; cursor:pointer; padding:0 4px; }
+.browse-x:hover { color:var(--text); }
+.browse-path { padding:8px 14px; font-family:var(--mono); font-size:11px; color:var(--muted);
+  background:#0a0f16; border-bottom:1px solid var(--border-soft);
+  white-space:nowrap; overflow-x:auto; }
+.browse-list { flex:1; overflow-y:auto; padding:4px 0; min-height:120px; }
+.browse-item { padding:6px 14px; font-size:12px; color:var(--text); cursor:pointer;
+  font-family:var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.browse-item:hover { background:rgba(88,166,255,.08); }
+.browse-item.sel { background:rgba(88,166,255,.18); color:#fff; }
+.browse-item.is-dir { color:var(--blue); }
+.browse-item.browse-up { color:var(--muted); font-style:italic; }
+.browse-foot { display:flex; justify-content:flex-end; gap:8px; padding:10px 14px;
+  border-top:1px solid var(--border-soft); }
+.browse-foot button { font:inherit; font-size:12px; padding:5px 14px; cursor:pointer;
+  background:#0a0f16; border:1px solid var(--border); border-radius:6px; color:var(--muted); }
+.browse-foot button:hover { border-color:var(--blue); color:var(--text); }
+.browse-foot #browse-select { color:var(--text); border-color:var(--blue); }
+
+/* trust */
+.trust { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:8px; margin-bottom:18px; font-size:13px; border:1px solid; }
+.trust b { font-family:var(--mono); }
+.trust.ok { background:rgba(63,185,80,.08); border-color:rgba(63,185,80,.4); color:var(--green); }
+.trust.bad { background:rgba(248,81,73,.08); border-color:rgba(248,81,73,.4); color:var(--red); }
+.trust.muted { background:var(--panel); border-color:var(--border); color:var(--muted); }
+
+/* hero 双联 */
+.hero { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px; }
+.card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px 18px; }
+.hero .card h2 { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin:0 0 4px; font-weight:600; }
+.hero .card .hint { font-size:11px; color:var(--faint); margin:0 0 12px; }
+.bigmetric { display:flex; align-items:baseline; gap:10px; margin-bottom:4px; }
+.bigmetric .num { font-family:var(--mono); font-size:38px; font-weight:700; color:var(--green); line-height:1; }
+.bigmetric .lab { color:var(--muted); font-size:12px; }
+.metric-sub { font-family:var(--mono); font-size:11px; color:var(--faint); margin:0 0 14px; }
+.dist { display:flex; flex-direction:column; gap:7px; }
+.dist-row { display:grid; grid-template-columns: 140px 1fr 80px; align-items:center; gap:8px; font-size:11px; cursor:pointer; }
+.dist-row:hover { background:rgba(88,166,255,.07); border-radius:3px; }
+.dist-more { opacity:.7; cursor:pointer; }
+.dist-row .name { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:var(--mono); }
+.bar { height:9px; background:#0b0e13; border-radius:5px; overflow:hidden; border:1px solid var(--border-soft); }
+.bar > span { display:block; height:100%; border-radius:4px; }
+.hit-h { background:var(--green); } .hit-m { background:var(--amber); } .hit-l { background:var(--red); }
+.dist-row .val { font-family:var(--mono); text-align:right; }
+.dist-row .ctx-out { display:block; font-size:9px; opacity:.6; font-weight:normal; line-height:1.15; }
+.dist-row.is-na { opacity:.5; }   /* 活跃 session 但无本面板口径数据 (— 行): 淡化, 不参与色阶 */
+/* hero context 半边: ctx 峰值分布 (Plan 3a 真数据, 与 cache 半边对称) */
+.bigmetric .ctx-num { color:var(--blue); }
+.ctx-fill { background:var(--blue); }
+.ctx-fill-warn { background:var(--amber); }
+.ctx-fill-blown { background:var(--red); }
+.ctx-warn { color:var(--amber); }
+.ctx-blown { color:var(--red); font-weight:600; }
+.dist-row .val.blown { color:var(--red); font-weight:600; }
+/* '…N more' 跳转后 fleet 表闪一下 (hero 聚光灯 → 表花名册的视觉接力) */
+@keyframes fleet-flash { 0%,100% { background:transparent; } 30% { background:rgba(88,166,255,.20); } }
+#fleet-table.flash { animation: fleet-flash 1.2s ease; }
+/* 后续 Task 5 补 gantt/twin/spark 样式; .pill 保留给可能的历史引用, 新代码不再用 */
+
+/* sections / table */
+.sec-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; flex-wrap:wrap; }
+.sec-head h2 { font-size:13px; margin:0; font-weight:600; }
+.sec-head .note { font-size:11px; color:var(--faint); }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+thead th { text-align:left; padding:8px 10px; color:var(--muted); font-weight:600; font-size:11px;
+           text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--border); white-space:nowrap; }
+#fleet-table thead th { cursor:pointer; user-select:none; }   /* 列头可点排序 (§8.3) */
+#fleet-table thead th:hover { color:var(--text); }
+#fleet-table thead th.sort-active { color:var(--blue); }      /* 当前排序列高亮 */
+thead th.num, td.num { text-align:right; font-family:var(--mono); }
+thead th .sort { color:var(--blue); margin-left:2px; }
+tbody td { padding:7px 10px; border-bottom:1px solid var(--border-soft); }
+tbody tr:hover { background:rgba(88,166,255,.05); }
+.sess { font-family:var(--mono); font-size:11px; }
+.sess .sid { color:var(--faint); }
+.cache { display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); }
+.cache .cbar { width:46px; height:6px; background:#0b0e13; border-radius:3px; overflow:hidden; border:1px solid var(--border-soft); display:inline-block; }
+.cache .cbar > span { display:block; height:100%; }
+.ok { color:var(--green); } .mid { color:var(--amber); } .lo { color:var(--red); }
+tr.spotlight td { background:rgba(240,136,62,.07); }
+tr.spotlight td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+.spot-tag { font-size:10px; color:var(--amber); margin-left:6px; }
+tr.empty td { color:var(--faint); }
+.empty-tag { font-size:10px; color:var(--faint); margin-left:6px; font-style:italic; }
+.pill { font-size:10px; padding:1px 8px; border-radius:9px; background:rgba(188,140,255,.12);
+        color:var(--purple); border:1px solid rgba(188,140,255,.3); font-family:var(--sans); white-space:nowrap; }
+.badge { font-weight:700; }
+tr.total-row td { border-top:1px solid var(--border); border-bottom:none; color:var(--muted); font-style:italic; background:rgba(88,166,255,.03); }
+
+footer { margin-top:26px; font-size:11px; color:var(--faint); line-height:1.7; border-top:1px solid var(--border-soft); padding-top:12px; }
+footer code { font-family:var(--mono); color:var(--muted); }
+/* === session view (§8.6) === */
+.hidden { display: none !important; }
+.back-btn { background:var(--panel); border:1px solid var(--border); color:var(--blue);
+            padding:6px 14px; border-radius:6px; cursor:pointer; font-size:12px; margin-bottom:12px; }
+.back-btn:hover { background:rgba(88,166,255,.1); }
+.l2-head { display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+.l2-head h1 { font-size:16px; margin:0; font-family:var(--mono); font-weight:600; }
+.l2-head h1 .sid { color:var(--faint); }
+
+/* spawn 时间轴 gantt */
+.gantt { position:relative; height:46px; background:#0b0e13; border:1px solid var(--border-soft); border-radius:6px;
+         overflow:hidden; }
+.gantt-seg { position:absolute; top:8px; height:30px; min-width:2px; border-radius:3px; opacity:.85; }
+.gantt-seg:hover { opacity:1; }
+.gantt-seg.outlier { top:6px; height:34px; box-shadow: 0 0 0 2px var(--amber); }
+.gantt-seg.hl { opacity:1; z-index:5; box-shadow:0 0 0 2px var(--text); }  /* agents 行悬停联动 */
+.gantt-gap { position:absolute; top:18px; transform:translateX(-50%); color:var(--faint);
+             font-size:9px; font-family:var(--mono); white-space:nowrap; z-index:2; }
+.gantt-gap.has-root { color:var(--purple); opacity:.9; }   /* D3: 间隙含 root turn (root 在活动, 非 idle), 紫区别于灰 idle */
+/* D1/D12: root 主线 turn = 时间轴上方 root lane 离散紫点 (top band 0-7px, 与 subagent 段 top:8 分层, 共享 tmin/tmax).
+   x=真实 ts; peak turn (max ctx) 琥珀环呼应 sparkline peak. hover 放大+光晕, pointer → turn 原文. */
+.root-dot { position:absolute; top:0; width:7px; height:7px; transform:translate(-50%,0);
+            background:var(--purple); border-radius:50%; cursor:pointer; z-index:3; opacity:.85;
+            box-shadow:0 0 0 1px rgba(188,140,255,.25); }
+.root-dot:hover { opacity:1; transform:translate(-50%,0) scale(1.5); box-shadow:0 0 6px 2px var(--purple); z-index:7; }
+.root-dot.peak { box-shadow:0 0 0 2px var(--amber), 0 0 4px rgba(240,136,62,.5); }   /* ctx peak turn = 琥珀环 */
+.root-dot.peak:hover { box-shadow:0 0 0 2px var(--amber), 0 0 8px 3px var(--purple); }
+.spark { cursor:crosshair; }     /* D15: context 曲线点 → turn 原文 root turn */
+.spark-pt { cursor:pointer; }    /* D15: 逐点透明命中圆 */
+
+/* twin-L2 双联 */
+.twin { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+.twin-list { display:flex; flex-direction:column; gap:5px; }
+
+/* context 曲线 (内联 SVG) */
+.spark { width:100%; height:96px; display:block; }
+.spark-cap { font-family:var(--mono); font-size:11px; color:var(--faint); margin-top:6px; }
+.spark-cap .lo { color:var(--red); }
+
+/* outlier callout */
+.callout { margin-top:16px; padding:10px 14px; background:rgba(240,136,62,.08); border:1px solid rgba(240,136,62,.4);
+           border-radius:8px; color:var(--text); font-size:12px; }
+.callout b { color:var(--amber); }
+@media (max-width:780px){ .twin{ grid-template-columns:1fr; } }
+@media (max-width:780px){ .hero{ grid-template-columns:1fr; } }
+/* === spawn view (§8.6) === */
+.l3-head h1 { font-size:16px; margin:0 0 14px; font-family:var(--mono); font-weight:600; }
+.l3-head .sid { color:var(--faint); }
+.l3-head .type-tag { font-size:12px; margin-left:8px; }
+.spawn-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:10px 14px; margin-bottom:10px; }
+.spawn-grid > div { font-size:12px; }
+.spawn-grid .m-lab { display:block; color:var(--faint); font-size:10px; text-transform:uppercase; letter-spacing:.5px; }
+.spawn-grid b { font-family:var(--mono); font-size:14px; }
+.stat-chips { display:flex; gap:6px; flex-wrap:wrap; margin:10px 0; }
+.prompt-sum { font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:8px; padding:8px 10px;
+              background:#0b0e13; border-radius:6px; border:1px solid var(--border-soft); }
+.callout.ok-callout { background:rgba(63,185,80,.08); border-color:rgba(63,185,80,.4); }
+.callout.muted-callout { background:var(--panel); border-color:var(--border); color:var(--muted); }
+.turn-list { display:flex; flex-direction:column; }
+.turn-row { display:grid; grid-template-columns: 44px 60px 44px 1fr auto auto; align-items:center; gap:10px;
+            padding:7px 10px; border-bottom:1px solid var(--border-soft); font-size:12px; cursor:pointer; }
+.turn-row:hover { background:rgba(88,166,255,.05); }
+.turn-row.turn-outlier { background:rgba(240,136,62,.07); box-shadow: inset 2px 0 0 var(--amber); }
+.turn-row.turn-outlier::before { content:"⚠"; color:var(--amber); position:absolute; margin-left:-16px; }
+.turn-row { position:relative; }
+.turn-row.flash { animation:agent-flash 0.5s ease-in-out 2; }  /* DR4/DR8: root 详情 入场定位 focus turn — 短闪两次 (复用 @keyframes agent-flash) */
+.turn-i, .turn-ts { font-family:var(--mono); color:var(--faint); }
+.turn-role { font-size:10px; color:var(--muted); text-transform:uppercase; }
+.turn-tool { color:var(--blue); font-family:var(--mono); }
+.turn-target { color:var(--text); font-family:var(--mono); font-size:11px; }
+.turn-tools { display:grid; grid-template-columns:max-content 1fr; column-gap:8px; row-gap:1px; align-items:baseline; min-width:0; }   /* 每 tool_use 一行: max-content 列 → 所有 tool 名按最宽自动对齐; 1fr 列 target 填充 */
+.turn-tools .turn-tool { white-space:nowrap; }
+.turn-tools .turn-target { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }   /* min-width:0 容许 grid 项收缩 → 长命令省略号不撑行 */
+.turn-burden { font-family:var(--mono); font-size:11px; text-align:right; }
+.tok-real { color:var(--text); }
+.tok-proxy { color:var(--amber); }
+.tok-break { color:var(--faint); font-size:10px; }   /* ctx 明细 in/cc/cr, 淡于 ctx 本体 */
+.turn-fold { padding:7px 10px; color:var(--faint); font-size:11px; font-style:italic;
+             text-align:center; border-bottom:1px solid var(--border-soft); cursor:pointer; }
+.turn-fold:hover { color:var(--blue); }
+@media (max-width:780px){ .spawn-grid{ grid-template-columns:repeat(3,1fr); }
+                          .turn-row{ grid-template-columns: 40px 1fr auto auto; }
+                          .turn-row .turn-ts,.turn-row .turn-role{ display:none; } }
+/* === turn logs (§8.6) === */
+.raw-tag { background:rgba(248,81,73,.08); border:1px solid rgba(248,81,73,.35); color:var(--amber);
+           padding:8px 14px; border-radius:8px; font-size:12px; margin-bottom:14px; }
+.l4-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+.l4-head h1 { font-size:15px; margin:0; font-family:var(--mono); }
+.raw-block { margin-bottom:10px; border:1px solid var(--border-soft); border-radius:6px; overflow:hidden; }
+.raw-block .raw-kind { padding:5px 10px; font-size:10px; text-transform:uppercase; letter-spacing:.5px;
+                       color:var(--muted); background:#0b0e13; border-bottom:1px solid var(--border-soft); }
+.raw-block pre { margin:0; padding:8px 10px; font-family:var(--mono); font-size:11px; color:var(--text);
+                 white-space:pre-wrap; word-break:break-word; }
+.raw-tooluse { border-left:3px solid var(--blue); }
+.raw-result { border-left:3px solid var(--green); }
+.raw-text { border-left:3px solid var(--purple); }
+.raw-result.is-error { border-left:3px solid var(--red); }
+.raw-result.is-error .raw-kind { color:var(--red); }
+/* 折叠 (§8.6 L573): tool_use ~8 行 / result ~10 行; 点 .foldable 切 expanded */
+.foldable { position:relative; cursor:pointer; }
+.foldable > pre { max-height:11em; overflow:hidden; }            /* ~8 行 */
+.foldable.raw-result > pre { max-height:14em; }                  /* ~10 行 */
+.foldable.expanded > pre { max-height:none; }
+.foldable::after { content:"▾ 展开"; position:absolute; bottom:4px; right:10px; font-size:10px;
+                   color:var(--blue); background:var(--panel); padding:1px 6px; border-radius:4px; }
+.foldable.expanded::after { content:"▴ 折叠"; }
+/* === skill 视角 §8.11 — 常驻活跃度表 + 点行 inline 展开 (session/spawn/turn) === */
+/* 活跃度表行可点 (点行 → inline master-detail 展开) */
+#skill-table tbody tr { cursor:pointer; }
+#skill-table tbody tr:hover { background:rgba(88,166,255,.06); }
+#skill-table tbody tr.sel { background:rgba(88,166,255,.12); }
+
+/* 点 skill 行后的 inline 展开行 (.skill-detail = 跨 4 列的详情行; .skill-detail-box 内按 session 分组列 spawn/turn) */
+.skill-detail > td { padding:0; }
+.skill-detail-box { padding:10px 14px; background:rgba(88,166,255,.05); border-top:1px solid var(--border-soft);
+  border-bottom:1px solid var(--border-soft); font-size:12px; }
+.skill-detail-box .bl-title { color:var(--muted); margin-bottom:8px; }
+.skill-detail-box .bl-empty { color:var(--faint); font-style:italic; padding:4px 0; }
+.sd-group { margin-bottom:6px; }
+.sd-group:last-child { margin-bottom:0; }
+.bl-sess { display:inline-block; margin:0 6px 4px 0; padding:3px 10px; border-radius:5px;
+  background:rgba(63,185,80,.08); border:1px solid rgba(63,185,80,.25); color:var(--green);
+  cursor:pointer; font-size:12px; font-family:var(--mono); }
+.bl-sess:hover { background:rgba(63,185,80,.16); }
+.sd-calls { display:flex; flex-wrap:wrap; gap:6px 10px; padding-left:2px; margin-bottom:4px; }
+.sd-call { color:var(--muted); font-family:var(--mono); font-size:11px; }
+.sd-call .sd-turn { color:var(--blue); }
+.sd-call .sd-idx { color:var(--green); font-weight:600; }   /* spawn 时序序号 #N (与 session 页时间轴/agents 行同号, 可互指) */
+.sd-call .sd-go { cursor:pointer; }
+.sd-call .sd-go:hover { text-decoration:underline; }   /* #N / turn 可点 → 钻 spawn 详情 (经 session 中转保视图栈) */
+
+/* 异步徽标 (cache 书挡行名 + agents 面板 agent-tag.async 共用; async_launched = run_in_background 后台 agent, 无 wall-clock 故时间轴只画启动竖线) */
+.async-tag { display:inline-block; font-size:9px; font-weight:600; padding:1px 5px; border-radius:4px;
+  background:rgba(240,136,62,.14); border:1px solid rgba(240,136,62,.4); color:var(--amber); }
+
+/* gantt 异步启动竖线 (无宽度 marker: run_in_background 启动时刻, 运行时长未知; 用户: "划道鲜明的线") */
+.gantt-async { position:absolute; top:0; bottom:0; width:0; border-left:2px dashed var(--amber);
+               transform:translateX(-1px); cursor:pointer; z-index:3; }
+.gantt-async::before { content:"▲"; position:absolute; top:-3px; left:-5px; font-size:8px; color:var(--amber); }
+.gantt-async:hover { border-left-color:var(--text); }
+.gantt-async.hl { border-left-color:var(--text); border-left-width:3px; z-index:6; }  /* agents 行悬停联动: 竖线加粗 */
+.gantt-async.multi::before { display:none; }    /* 并发簇: 用 ×N 胶囊替代单 ▲ 标 */
+.gantt-async-n { position:absolute; top:2px; left:50%; transform:translateX(-50%); font-size:8px;
+                  font-family:var(--mono); font-weight:700; color:#0b0e13; background:var(--amber);
+                  border-radius:7px; padding:0 4px; white-space:nowrap; line-height:12px; z-index:4; }
+/* gantt 时间轴标尺: 0 (起) → 中点 → 总时长 (终). 用户: "从 0 开始, 终点到多少分钟" */
+.gantt-axis { display:flex; justify-content:space-between; font-family:var(--mono); font-size:9px;
+              color:var(--faint); padding:0 1px 3px; }
+
+/* agents 面板 (全 spawn 花名册: sync + 异步 + 失败 统一; 吸收原异步专列) */
+.agent-list { display:flex; flex-direction:column; gap:4px; max-height:360px; overflow-y:auto; }
+.agent-row { display:grid; grid-template-columns:auto auto 1fr auto auto auto; align-items:center; gap:10px;
+             padding:6px 8px; border-radius:4px; border:1px solid var(--border-soft); font-size:12px; cursor:pointer; }
+.agent-row:hover { background:rgba(88,166,255,.08); }
+.agent-row.async:hover { background:rgba(240,136,62,.12); }
+.agent-row.fail { border-color:rgba(248,81,73,.4); }
+.agent-row.fail:hover { background:rgba(248,81,73,.10); }
+.agent-row.hl, .agent-row.sel { background:rgba(88,166,255,.16); border-color:var(--blue); box-shadow:0 0 0 2px var(--blue) inset; }  /* .hl=悬停联动; .sel=并发簇点击锁定 (持久, 区别 .hl) */
+@keyframes agent-flash { 0%,100%{box-shadow:0 0 0 2px var(--amber) inset} 50%{box-shadow:0 0 0 3px var(--amber) inset, 0 0 10px var(--amber)} }
+.agent-row.flash { animation:agent-flash 0.45s ease-in-out 2; }  /* 并发簇点击: 短闪两次吸引注意 */
+.agent-tag { display:inline-block; font-size:9px; font-weight:600; padding:1px 6px; border-radius:4px; white-space:nowrap; }
+.agent-tag.done { background:rgba(63,185,80,.12); color:var(--green); border:1px solid rgba(63,185,80,.3); }
+.agent-tag.async { background:rgba(240,136,62,.12); color:var(--amber); border:1px solid rgba(240,136,62,.3); }
+.agent-tag.fail { background:rgba(248,81,73,.12); color:var(--red); border:1px solid rgba(248,81,73,.3); }
+.agent-row .agent-type { color:var(--text); font-family:var(--mono); }
+.agent-row .agent-meta { color:var(--muted); font-family:var(--mono); font-size:10px; }
+.agent-row .agent-model { color:var(--faint); font-family:var(--mono); font-size:10px; }
+.agent-row .agent-idx { color:var(--faint); font-family:var(--mono); font-size:10px; min-width:22px; }  /* roster 序号 #i: 同名 agent 消歧; 时间轴竖线 tooltip 回指 */
+.spawn-idx { color:var(--blue); font-family:var(--mono); }  /* 详情页标题 spawn #i 主标识 (同名区分; agents 面板外统一带 #i 体系) */
+.row-idx { color:var(--faint); font-family:var(--mono); font-size:10px; }  /* cache 书挡/拓扑 spawn 名后 #i (对回 agents 面板行; 与 agent-idx 同口径) */
+
+/* skill 切面 (该 session 用的 skill, SkillCall 事件维度) */
+.skill-head, .skill-row { display:grid; grid-template-columns:1.4fr 50px 56px 1fr; align-items:center; gap:10px; font-size:12px; }
+.skill-head { color:var(--faint); font-size:10px; text-transform:uppercase; letter-spacing:.4px;
+              border-bottom:1px solid var(--border-soft); padding-bottom:5px; margin-bottom:4px; }
+.skill-row { padding:4px 0; border-bottom:1px solid var(--border-soft); }
+.skill-row:last-child { border-bottom:none; }
+.skill-name { color:var(--text); font-family:var(--mono); }
+.skill-num { text-align:right; color:var(--muted); font-family:var(--mono); }
+.skill-caller { color:var(--muted); font-family:var(--mono); font-size:10px; }
+.skill-ref { display:inline-block; font-family:var(--mono); font-size:10px; color:var(--blue);
+             background:rgba(88,166,255,.10); border:1px solid rgba(88,166,255,.30); border-radius:4px;
+             padding:0 4px; margin-left:3px; cursor:pointer; }  /* skill 调用方 spawn #i chip → spawn 详情 (与 agents/时间轴同一序号) */
+.skill-ref:hover { background:rgba(88,166,255,.22); }
+/* D9: skill turn 锚点 chip = (callerAgentId, callerTurn) → turn 原文. 蓝 = subagent 调 (type#i·tN); 紫 .root = root 主线调 (root·tN). 复用 .skill-ref 视觉骨架. */
+.skill-turn { display:inline-block; font-family:var(--mono); font-size:10px; color:var(--blue);
+              background:rgba(88,166,255,.10); border:1px solid rgba(88,166,255,.30); border-radius:4px;
+              padding:0 4px; margin:0 2px; cursor:pointer; white-space:nowrap; }
+.skill-turn:hover { background:rgba(88,166,255,.22); }
+.skill-turn.root { color:var(--purple); background:rgba(188,140,255,.12); border-color:rgba(188,140,255,.32); }  /* root 直调 = 紫主线 */
+.skill-turn.root:hover { background:rgba(188,140,255,.24); }
+
+/* 拓扑缩进树 (callChains: parent→children) */
+.topo-tree { font-family:var(--mono); font-size:12px; }
+.topo-node { padding:3px 6px; cursor:default; }
+.topo-node[data-agentid] { cursor:pointer; }
+.topo-node[data-agentid]:hover { background:rgba(88,166,255,.08); border-radius:3px; }
+.topo-node.root { color:var(--blue); font-weight:600; }
+.topo-node .topo-arm { color:var(--faint); margin-right:4px; }
+.topo-node .topo-type { color:var(--text); }
+.topo-node .topo-role { font-size:10px; padding:1px 8px; border-radius:9px; background:rgba(188,140,255,.12);
+        color:var(--purple); border:1px solid rgba(188,140,255,.3); font-family:var(--sans); white-space:nowrap;
+        margin-right:6px; text-transform:uppercase; letter-spacing:.04em; }  /* D6: 根角色标签 orchestrator (复用紫系 chip 美学; 主线=orchestrator) */
+/* 拓扑 spawn 锚点 ↗tN (caller→spawn 详情): 点进调用方详情 定位 (depth-2=root 主线 / depth-3=父 spawn); 点行进本 spawn 详情 不变. 复用 .skill-turn 视觉骨架; 紫 .root = 调用方是主线, 蓝 = 调用方是父 spawn. */
+.topo-anchor { display:inline-block; font-family:var(--mono); font-size:10px; color:var(--blue);
+        background:rgba(88,166,255,.10); border:1px solid rgba(88,166,255,.30); border-radius:4px;
+        padding:0 4px; margin-left:6px; cursor:pointer; white-space:nowrap; }
+.topo-anchor:hover { background:rgba(88,166,255,.22); }
+.topo-anchor.root { color:var(--purple); background:rgba(188,140,255,.12); border-color:rgba(188,140,255,.32); }  /* 调用方=root 主线 → 紫 */
+.topo-anchor.root:hover { background:rgba(188,140,255,.24); }
+/* 拓扑长树部分折叠 (镜像 renderTurnList): 默认显前 8 个 spawn, 其余 .topo-folded 隐; .topo-fold 折叠条常驻 toggle (⋯ 点展开 ↔ ▴ 收起), 不随展开消失. */
+.topo-tree:not(.topo-expanded) .topo-node.topo-folded { display:none; }
+.topo-fold { color:var(--faint); padding:3px 6px 3px 30px; cursor:pointer; font-size:11px; user-select:none; }
+.topo-fold:hover { color:var(--blue); }
+.topo-tree.topo-expanded .topo-fold { color:var(--muted); }   /* 展开: 折叠条文案变 '▴ 收起', 色稍亮提示可点回收 */
+
+/* agents 面板书挡 more 跳转闪 (镜像 fleet-flash, app.js jumpToAgentsPanel) */
+#agents-panel.flash { animation: fleet-flash 1.2s ease; }
+
+/* === §8.6 详情页健康状况下沉 — ✗ tool 失败 / 💥 ctx 爆掉 标记 (2026-06-21) === */
+/* 三类 fleet 信号 (💥ctx/⚠低命中/⏳异步) + ✗ tool 失败 下沉到 session/root/spawn 详情页.
+   分轨: is_error (provider 层 tool 执行失败) ≠ spawn status 失败 — 绝不并 successRate/grandTotal. */
+/* session 页健康区: 复用 .trust.ok/.bad; 段可换行 (窄屏); 全 0 显 ✓ 健康 (零噪声, 不吵健康 session). */
+.trust.l2-health { flex-wrap:wrap; row-gap:5px; margin-bottom:14px; }
+/* ✗ tool 失败 小药丸 (agents 花名册行尾 col6; 红). 失败扎堆 session 一眼定位元凶 spawn (status=completed 仍可标, 证明 is_error≠status 分轨). */
+.tool-err { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px;
+            white-space:nowrap; background:rgba(248,81,73,.14); color:var(--red); border:1px solid rgba(248,81,73,.4);
+            font-family:var(--mono); }
+/* 详情页标题徽章 (spawn ✗N / root 💥N+✗N): 略大于行尾 .tool-err, 紧跟 l3-head 标题. */
+.head-badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:5px;
+              margin-left:8px; vertical-align:middle; white-space:nowrap;
+              background:rgba(248,81,73,.14); color:var(--red); border:1px solid rgba(248,81,73,.4);
+              font-family:var(--mono); }
+/* turn 行 ✗ (逐 turn 定位失败 tool): 红 mono, 长名省略号 (全名在 tooltip). 列恒占位 (健康 turn 空 cell 塌缩, 不破坏 burden 右对齐). */
+.turn-err { font-family:var(--mono); font-size:10px; color:var(--red); font-weight:600;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px; }
+/* root 详情 💥 爆掉 callout (红, 呼应 session 健康区 💥 段; 9aa81da2 peak 201k 爆掉 → 显红非琥珀). */
+.callout.bad-callout { background:rgba(248,81,73,.08); border-color:rgba(248,81,73,.4); }
+.callout.bad-callout b { color:var(--red); }

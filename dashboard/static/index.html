@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agent-insight · 全局总览</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>agent-insight <span class="sub">全局总览</span></h1>
+    <div class="meta-chips" id="meta"></div>
+    <button id="live-toggle" class="live-toggle on" type="button" aria-pressed="true"
+            title="实时刷新开关 · 开着时每 2 秒查一次数据、有变化才更新 · 点进某条详情或切到别的浏览器标签页时暂停">live-tail<span class="dot">●</span></button>
+  </div>
+
+  <div class="src-bar">
+    <label class="src-lab" for="source-select">数据源</label>
+    <select id="source-select" title="常用数据源快捷 (类型自动识别)"></select>
+    <input id="source-input" type="text" spellcheck="false"
+           placeholder="粘贴目录或 .jsonl 文件路径（自动识别）">
+    <button id="source-apply" type="button" title="应用自定义源 (校验过才切 · 失败回滚旧源)">切换</button>
+    <button id="source-browse" type="button" title="打开目录浏览弹层 (server /api/browse 读真实 FS · 浏览器原生 file picker 拿不到真实路径, fakepath 铁律)">📁 浏览…</button>
+  </div>
+
+  <div id="fleet-view">
+
+  <div id="trust-banner"></div>
+
+  <div class="hero">
+    <div class="card" id="hero-cache-body"></div>
+    <div class="card" id="hero-context-body"></div>
+  </div>
+
+  <!-- fleet · by-session 总览表 (常驻 card; 不再 tab 切换) -->
+  <section class="card" id="pane-by-session">
+    <div class="sec-head">
+      <h2>全局 · by-session</h2>
+      <span class="note">点行 → session 编排视图（spawn 时间轴 + 逐 turn 曲线）· 默认 total 降序</span>
+    </div>
+    <table id="fleet-table">
+      <thead><tr>
+        <th data-col="session">session</th><th data-col="spawns" class="num">spawns</th><th data-col="dur" class="num">dur<sub style="font-size:9px;">active</sub></th>
+        <th data-col="total" class="num">total <span class="sort"></span></th><th data-col="cache" class="num">cache%</th>
+        <th data-col="fullin" class="num">全价 input</th><th data-col="ctx" class="num">ctx peak</th><th data-col="ok" class="num">健康</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- skill 活跃度 (第二切面 · 零 token 能力画像 · 常驻; 点 skill 行 → inline 展开该 skill 出现在哪些 session / spawn / turn) -->
+  <section class="card" id="pane-by-skill">
+    <div class="sec-head">
+      <h2>skill 活跃度（零 token）</h2>
+      <span class="note">能力维度, 非容器 · 点 skill 行 → 展开它出现在哪些 session / spawn / turn</span>
+    </div>
+    <table id="skill-table">
+      <thead><tr><th>skill</th><th class="num">calls</th><th class="num">sessions</th><th class="num">spawns</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  </div><!-- /fleet-view -->
+
+  <div id="level2-view" class="hidden"></div>
+
+  <div id="level3-view" class="hidden"></div>
+
+  <div id="level4-view" class="hidden"></div>
+
+  <footer>
+    数据由 <code>analyze.py --json</code> 离线产出（只读聚合结果, 不碰 prompt 与原文内容）·
+    spawn 详情 / turn 原文 按需直读 <code>agent-*.jsonl</code>（逐字原文, 不走 token 聚合）<br>
+    <code>全局总览</code>（全局总览表 + 健康信号 banner + skill 活跃度常驻; 点 skill 行展开 session/spawn/turn）·
+    <code>session 视图</code>（spawn 时间轴 + 逐 turn context 曲线）·
+    <code>spawn 详情</code>（spawn 头 + 逐 turn token + 异常归因 + 折叠）· <code>turn 原文</code>（逐字 raw + 折叠）
+  </footer>
+
+  <!-- 目录浏览弹层 (运行时切源 · 浏览器 fakepath 铁律 → server /api/browse + 自建弹层) -->
+  <div id="browse-modal" class="browse-modal hidden">
+    <div class="browse-box">
+      <div class="browse-head">
+        <span class="browse-title">浏览数据源 <span class="faint">(选目录或 .jsonl 文件 → 选定 · 类型自动识别)</span></span>
+        <button id="browse-x" type="button" class="browse-x" title="关闭 (Esc)">×</button>
+      </div>
+      <div id="browse-path" class="browse-path" title="当前目录"></div>
+      <div id="browse-list" class="browse-list"></div>
+      <div class="browse-foot">
+        <button id="browse-cancel" type="button">取消</button>
+        <button id="browse-select" type="button" title="填入路径框（类型自动识别, 留你点切换确认）">选定 →</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
