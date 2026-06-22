@@ -113,7 +113,7 @@ def build_session(tmp, proj, sid, root_lines, subagents=None):
                     f.write(ln + "\n")
 
 
-def run_scan(tmp, project=None, json_mode=True, extra=None):
+def run_scan(tmp, project=None, json_mode=True, extra=None, env=None):
     cmd = [sys.executable, ANALYZE, "--scan-projects", tmp]
     if project:
         cmd += ["--project", project]
@@ -121,7 +121,7 @@ def run_scan(tmp, project=None, json_mode=True, extra=None):
         cmd += ["--json"]
     if extra:
         cmd += extra
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=env)   # env=None → 继承父 (S1-S11 不变); S12+ 显式 AGENTINSIGHT_LOG_DIR 隔离测 lineage map
     res = {"_rc": p.returncode, "_stderr": p.stderr, "_stdout": p.stdout}
     if json_mode and p.returncode == 0:
         try:
@@ -364,6 +364,93 @@ check("SID_A ctxPeak==9000 (root turn 3000+6000; spawn 行不计 root ctx)",
       rows[SID_A].get("ctxPeak") == 9000, rows.get(SID_A))
 check("SID_B ctxPeak==0 (无 root usage, 字段在)", rows[SID_B].get("ctxPeak") == 0, rows.get(SID_B))
 shutil.rmtree(d, ignore_errors=True)
+
+
+# ===== S14 Phase 3 跨 session 缝合 (generations.jsonl 映射两 sid → 同 gid; result.generations multiSession) =====
+print("\n[S14] 跨 session 缝合 — generations.jsonl 映射两 sid 到同 g-task → 一条 multiSession generation")
+d = tempfile.mkdtemp(prefix="obs-scan-s14-")
+build_session(d, "fleet", SID_A, [agent_line("a1", total_tokens=1000)])
+build_session(d, "fleet", SID_B, [agent_line("a2", total_tokens=2000)])
+# generations.jsonl 放 <log_base> 根 (base, 非 scan_dir; 跨 project 全局表) — 两 sid → 同 g-task
+log_base = tempfile.mkdtemp(prefix="obs-scan-s14-glb-")
+with open(os.path.join(log_base, "generations.jsonl"), "w") as f:
+    f.write(json.dumps({"schemaVersion": 1, "recordType": "GenerationLineage",
+                        "sessionId": SID_A, "generationId": "g-task", "carrierSource": "env",
+                        "source": "startup", "writer": "plugin-hook", "projectName": "fleet"}) + "\n")
+    f.write(json.dumps({"schemaVersion": 1, "recordType": "GenerationLineage",
+                        "sessionId": SID_B, "generationId": "g-task", "carrierSource": "env",
+                        "source": "resume", "writer": "plugin-hook", "projectName": "fleet"}) + "\n")
+env = {**os.environ, "AGENTINSIGHT_LOG_DIR": log_base}   # 继承 PATH/HOME/locale, 只覆写 LOG_DIR
+res = run_scan(d, env=env)
+check("exit 0", res.get("_rc") == 0, res.get("_stderr"))
+check("--json 含 generations (新可见产物)", "generations" in res, list(res.keys()))
+ps = res.get("perSession", [])
+check("perSession=2", len(ps) == 2, len(ps))
+check("两行 generationId 都=g-task (map post-ingest 覆盖)",
+      all(r.get("generationId") == "g-task" for r in ps), [r.get("generationId") for r in ps])
+gens = res.get("generations", [])
+check("generations 列表非空", isinstance(gens, list) and len(gens) >= 1, gens)
+multi = [g for g in gens if g.get("multiSession")]
+check("恰好 1 条 multiSession generation", len(multi) == 1, [g.get("generationId") for g in gens])
+mg = multi[0] if multi else {}
+check("multiSession generationId=g-task", mg.get("generationId") == "g-task", mg)
+check("multiSession sessionsN=2", mg.get("sessionsN") == 2, mg)
+check("multiSession sessionIds=[A,B]", set(mg.get("sessionIds", [])) == {SID_A, SID_B}, mg)
+# 卷起 grandTotal.total == 两成员 session perSession grandTotal.total 之和 (口径无关, 只验求和算术)
+expected_total = sum(r.get("grandTotal", {}).get("total", 0) for r in ps)
+check("multiSession grandTotal.total == 成员 session 之和 (卷起)",
+      mg.get("grandTotal", {}).get("total") == expected_total,
+      {"gen": mg.get("grandTotal"), "sum": expected_total})
+shutil.rmtree(d, ignore_errors=True)
+shutil.rmtree(log_base, ignore_errors=True)
+
+# ===== S15 Phase 3 foreign session 回退 (map 缺一 → 后者 singleton generationId==sid, 不崩) =====
+print("\n[S15] foreign 回退 — map 有 SID_A 缺 SID_B → B generationId==sid 自成 singleton, 不崩")
+d = tempfile.mkdtemp(prefix="obs-scan-s15-")
+build_session(d, "fleet", SID_A, [agent_line("a1", total_tokens=1000)])
+build_session(d, "fleet", SID_B, [agent_line("a2", total_tokens=2000)])
+log_base = tempfile.mkdtemp(prefix="obs-scan-s15-glb-")
+with open(os.path.join(log_base, "generations.jsonl"), "w") as f:
+    # 只 SID_A 入 map; SID_B 缺 → reader 回退 generationId=sessionId
+    f.write(json.dumps({"schemaVersion": 1, "recordType": "GenerationLineage",
+                        "sessionId": SID_A, "generationId": "g-known", "carrierSource": "env",
+                        "source": "startup", "writer": "plugin-hook"}) + "\n")
+env = {**os.environ, "AGENTINSIGHT_LOG_DIR": log_base}
+res = run_scan(d, env=env)
+check("exit 0 (foreign 不崩)", res.get("_rc") == 0, res.get("_stderr"))
+ps_map = {r["sid"]: r for r in res.get("perSession", [])}
+check("SID_A generationId=g-known (命中 map)", ps_map.get(SID_A, {}).get("generationId") == "g-known",
+      ps_map.get(SID_A, {}).get("generationId"))
+check("SID_B generationId==SID_B (未命中 → sid 回退)",
+      ps_map.get(SID_B, {}).get("generationId") == SID_B, ps_map.get(SID_B, {}).get("generationId"))
+gens = res.get("generations", [])
+by_gid = {g.get("generationId"): g for g in gens}
+check("generations 2 条 (g-known + SID_B 各一)", len(gens) == 2, [g.get("generationId") for g in gens])
+check("g-known generation singleton (multiSession=False, 只 SID_A)",
+      by_gid.get("g-known", {}).get("multiSession") is False, by_gid.get("g-known"))
+check("SID_B 自成 singleton generation (multiSession=False)",
+      by_gid.get(SID_B, {}).get("multiSession") is False, by_gid.get(SID_B))
+shutil.rmtree(d, ignore_errors=True)
+shutil.rmtree(log_base, ignore_errors=True)
+
+# ===== S16 Phase 3 inert (无 generations.jsonl → 全 singleton, 今天行为逐字不变) =====
+print("\n[S16] inert — log_base 无 generations.jsonl → 空 map → perSession generationId==sid; generations 全 singleton")
+d = tempfile.mkdtemp(prefix="obs-scan-s16-")
+build_session(d, "fleet", SID_A, [agent_line("a1", total_tokens=1000)])
+build_session(d, "fleet", SID_B, [agent_line("a2", total_tokens=2000)])
+log_base = tempfile.mkdtemp(prefix="obs-scan-s16-glb-")   # 空 (刻意不建 generations.jsonl)
+env = {**os.environ, "AGENTINSIGHT_LOG_DIR": log_base}
+res = run_scan(d, env=env)
+check("exit 0 (inert)", res.get("_rc") == 0, res.get("_stderr"))
+ps = res.get("perSession", [])
+check("inert: perSession 每行 generationId==sid (空 map 不覆盖)",
+      all(r.get("generationId") == r.get("sid") for r in ps), [(r.get("sid"), r.get("generationId")) for r in ps])
+gens = res.get("generations", [])
+check("inert: generations 全 singleton (multiSession=False)",
+      all(not g.get("multiSession") for g in gens), [g.get("multiSession") for g in gens])
+check("inert: generations 2 条 (每 sid 各一 singleton)", len(gens) == 2, len(gens))
+shutil.rmtree(d, ignore_errors=True)
+shutil.rmtree(log_base, ignore_errors=True)
 
 
 # ===== 收尾 =====

@@ -320,7 +320,8 @@ function render(result) {
   const tbody = document.querySelector("#fleet-table tbody");
   tbody.innerHTML = "";
   const sorted = sortRows(result.perSession || []);
-  for (const r of sorted) {
+  // 单行构建抽成函数 (gen-tag + gen-group 分派共用); 8 列 → gen-head colspan=8.
+  function fleetRow(r) {
     const b = billable(r);                                  // 合并 root 主线 + subagent 三桶 (== cache 面板口径)
     const bt = b.cacheRead + b.input + b.cacheCreation;     // 合并计费总量 (纯 root session 不再显 0)
     const hit = sessHit(r);                                 // 合并命中率 (与 hero/cache 面板一致)
@@ -331,6 +332,7 @@ function render(result) {
     if (spotlight) tr.className = "spotlight";
     else if (tc === "empty") tr.className = "empty";
     tr.dataset.sid = r.sid || "";
+    tr.dataset.gen = r.generationId || "";                  // Phase 3: 续接 generationId (== sid 则无 carrier, gen-tag 不显)
     tr.style.cursor = "pointer";
     tr.addEventListener("click", () => drillSession(r.sid));
     let cacheCell;
@@ -343,8 +345,12 @@ function render(result) {
     }
     const tag = spotlight ? `<span class="spot-tag">outlier</span>`
               : (tc === "empty" ? `<span class="empty-tag">空壳</span>` : "");
+    // Phase 3 跨 session 续接 (§10.1): generationId != sid (carrier 把多 session 缝成同 generation) → 显 ⟿ 续接 tag
+    const genTag = (r.generationId && r.generationId !== r.sid)
+      ? `<span class="gen-tag" title="跨 session 续接 generation ${esc(r.generationId)}">⟿ ${esc(String(r.generationId).slice(0, 8))}</span>`
+      : "";
     tr.innerHTML =
-      `<td class="sess">${projName(r.project)} <span class="sid">${esc((r.sid || "?").slice(0, 8))}</span>${tag}</td>` +
+      `<td class="sess">${projName(r.project)} <span class="sid">${esc((r.sid || "?").slice(0, 8))}</span>${tag}${genTag}</td>` +
       `<td class="num">${r.spawns != null ? r.spawns : 0}</td>` +
       `<td class="num">${fmtDur(r.durationS)}</td>` +
       `<td class="num">${fmt(bt)}</td>` +
@@ -352,7 +358,33 @@ function render(result) {
       `<td class="num">${fmt(fullInput)}</td>` +
       `<td class="num">${ctxCell(r.ctxPeak, r.ctxLimitErrors)}</td>` +
       `<td class="num">${healthCell(r)}</td>`;
-    tbody.appendChild(tr);
+    return tr;
+  }
+  // Phase 3 gen-group (默认关 → 逐行平铺, 今天行为逐字不变): 勾选则按 generationId 分桶,
+  // multiSession (>1 成员) 桶前插组头行 (generationId + 成员数 + 卷起 total, 取 result.generations).
+  const _gensById = {};
+  for (const g of (result.generations || [])) _gensById[g.generationId] = g;
+  const genGroupOn = !!(document.getElementById("gen-group") && document.getElementById("gen-group").checked);
+  if (genGroupOn) {
+    const buckets = {}, order = [];
+    for (const r of sorted) {
+      const gid = r.generationId || r.sid;
+      if (!buckets[gid]) { buckets[gid] = []; order.push(gid); }
+      buckets[gid].push(r);
+    }
+    for (const gid of order) {
+      const rows = buckets[gid], g = _gensById[gid];
+      if (g && g.multiSession && rows.length > 1) {
+        const gh = document.createElement("tr");
+        gh.className = "gen-head";
+        gh.innerHTML = `<td colspan="8"><span class="gen-tag">⟿ ${esc(gid.slice(0, 8))}</span> ` +
+          `<span class="faint">跨 session 续接 · ${g.sessionsN} session · 卷起 ${fmt((g.grandTotal || {}).total || 0)} token</span></td>`;
+        tbody.appendChild(gh);
+      }
+      for (const r of rows) tbody.appendChild(fleetRow(r));
+    }
+  } else {
+    for (const r of sorted) tbody.appendChild(fleetRow(r));
   }
   // 合计 footer
   const ft = document.createElement("tr");

@@ -31,7 +31,7 @@ Claude Code 跑一个大任务会派出一堆 subagent,但你看不到:
 | **运行时数据源切换器**(不重启 server 切 scan/live/自定义) | ✅ 已交付 |
 | **`/insight` 主动入口**(slash command) | 🔧 待加(见 [commands/](commands/)) |
 | Level ② session 编排视图 + hero context 半边 | ✅ 已交付(点行 → 单 session → spawn/turn;hero 双面板含 root ctx 峰值) |
-| 跨 session 续接(SessionStart hook + lineage) | 📋 规划中 |
+| 跨 session 续接(SessionStart hook + lineage 缝合) | ✅ 已交付(lineage 缝合建满;budgetState defer) |
 
 **真数据基线**(fleet 扫描实测):**17 session / 705 spawn / 41.05M token(91.2% cacheRead)/ all consistent / 0 error**——跨多个真实 CC 编排项目。
 

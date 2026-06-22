@@ -410,14 +410,17 @@ def by_skill(events):
 
 def _per_session_row(*, project, sid, spawns, grand_total_dict, dur_ms,
                      consistent, mode_label, ctx_peak=0, ctx_limit_errors=None,
-                     root_usage=None, async_count=0, tool_error_count=0):
-    """Build one perSession row — app.js fleet-table 契约 (§9 双数据源: live+offline 同形渲染).
+                     root_usage=None, async_count=0, tool_error_count=0,
+                     generation_id=None):
+    """Build one perSession row — app.js fleet-table 契约 15 字段 (§9 双数据源: live+offline 同形渲染).
     Shared by Mode A (live logdir, 按 sessionId 分组) 与 Mode B (scan, per mini-result).
-    值由调用方算好; 本函数只 shape → 两源形状逐字段一致, 不漂移."""
+    值由调用方算好; 本函数只 shape → 两源形状逐字段一致, 不漂移.
+    generation_id: Phase 3 跨 session 续接 (§10.1); 缺/无 carrier → = sid (singleton, 今天行为)."""
     total = grand_total_dict["total"]
     return {
         "project": project,
         "sid": sid,
+        "generationId": generation_id,   # Phase 3 (§10.1): = sid 当无 carrier/lineage; fleet gen-tag 显 ⟿ 当 ≠ sid
         "spawns": spawns,
         "totalTokens": total,
         "cacheReadPct": round(grand_total_dict["cacheRead"] / total * 100, 1) if total else 0.0,
@@ -629,6 +632,90 @@ def _projects_root(path):
     return None
 
 
+# ---------- Phase 3: 跨 session 续接 (lineage 缝合, §10.1) ----------
+def load_generations_map(log_base=None):
+    """读 <log_base>/generations.jsonl → ({sessionId: generationId}, [raw_rows]). inert-safe.
+
+    缺文件/坏目录 → ({}, []); 坏行逐行 try/except 跳 (镜像 _load_jsonl_file 的 per-line 容错); 非 dict 跳.
+    log_base 默认走 record.py _log_base 同优先级 (AGENTINSIGHT_LOG_DIR > CLAUDE_PLUGIN_DATA > ~/.claude/agent-insight).
+    last-writer-wins: 同 sessionId 多行后写覆盖前 (Breather 行更知真实 handoff 图, 应盖 plugin-hook 行).
+    reader 只取 sessionId/generationId; timestamp(plugin-hook)/ts(Breather)/prevSessionId 读到不参与."""
+    base = log_base or (os.environ.get("AGENTINSIGHT_LOG_DIR", "").strip()
+                        or os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
+                        or os.path.expanduser("~/.claude/agent-insight"))
+    path = os.path.join(base, "generations.jsonl")
+    mapping, raw = {}, []
+    if not os.path.exists(path):
+        return mapping, raw
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                sid = d.get("sessionId")
+                gid = d.get("generationId")
+                if sid and gid:
+                    mapping[sid] = gid      # last-writer-wins (append 顺序: 后写盖前)
+                    raw.append(d)
+    except OSError:
+        return {}, []
+    return mapping, raw
+
+
+def _apply_generation_map(records, mapping):
+    """reader 级 post-ingest 缝合: records 的 sessionId 命中 lineage map → 覆盖 generationId.
+
+    Mode B (transcript_adapter) 记录硬 generationId=sessionId/carrierSource=None (transcript 无 carrier 通路);
+    命中 map 则覆盖 generationId, 并 (仅当原 carrierSource 空) 置 carrierSource='lineage-map' (reader 内存态标记,
+    标 'post-ingest 从 generations.jsonl 恢复'; recorder 永不落盘此值 → schema carrierSource enum 不含).
+    Mode A live 记录 generationId 已正确 (record.py 落盘时 carrier 已生效) → map 值与现值相同, no-op 确认.
+    空 map → 直接返回, 零改动 (今天行为). 就地改 records (list of dict)."""
+    if not mapping:
+        return
+    for r in records:
+        sid = r.get("sessionId")
+        if sid and sid in mapping:
+            new_gid = mapping[sid]
+            if r.get("generationId") != new_gid:
+                r["generationId"] = new_gid
+                if not r.get("carrierSource"):
+                    r["carrierSource"] = "lineage-map"
+
+
+def aggregate_generations(per_session_rows):
+    """按 generationId 卷 per_session_rows → generation 聚合列表 (跨 session 续接可见产物, §10.1).
+
+    每条: {generationId, sessionIds[], sessionsN, spawnsTotal, grandTotal, durationS, multiSession}.
+    generationId==sid (无 carrier/无 lineage) 的 session → 单成员 generation (multiSession=False) → 渲染同今天.
+    grandTotal 复用 _merge_grand_total (cacheRead-inclusive 计费口径, 与 grandTotal 同核; pre-existing token 债不动).
+    按 grandTotal.total 降序."""
+    by_gen = defaultdict(list)
+    for row in per_session_rows:
+        gid = row.get("generationId") or row.get("sid")
+        by_gen[gid].append(row)
+    out = []
+    for gid, rows in by_gen.items():
+        gt = _merge_grand_total([r["grandTotal"] for r in rows])
+        out.append({
+            "generationId": gid,
+            "sessionIds": sorted(r["sid"] for r in rows),
+            "sessionsN": len(rows),
+            "spawnsTotal": sum(r["spawns"] for r in rows),
+            "grandTotal": gt,
+            "durationS": round(sum(r["durationS"] for r in rows), 1),
+            "multiSession": len(rows) > 1,
+        })
+    out.sort(key=lambda g: g["grandTotal"]["total"], reverse=True)
+    return out
+
+
 def run_scan(args):
     """扫 scan_dir 下全部 (或 --project 过滤的) root transcript, 逐 session 跑同条 Mode B 管线得 mini-result.
 
@@ -639,6 +726,7 @@ def run_scan(args):
     project = getattr(args, "project", None)
     paths = discover_root_transcripts(scan_dir, project) if discover_root_transcripts else []
     per_session, errors = [], []
+    mapping, _generations_raw = load_generations_map()   # Phase 3: 全局 lineage map (generations.jsonl; 缺→空 map→inert)
     for path in paths:
         ns = SimpleNamespace(transcript=path, project=project)   # load_transcript 只 getattr transcript/project
         try:
@@ -649,13 +737,16 @@ def run_scan(args):
             errors.append({"path": path, "error": f"{type(e).__name__}: {e}"})
             continue
         recs = _reconcile_live_records(recs, projects_root=_projects_root(scan_dir))   # 读端补全: proot 从 scan_dir 上溯到 projects 根 (scan 可能是单 project dir, dashboard 常用); 否则默认 ~/.claude/projects 找不到非标源 (非标 project) agent 终态 → async 全误报在飞. asyncCount 据此只数真在飞的
+        _apply_generation_map(recs, mapping)   # Phase 3: post-reconcile 缝合 (Mode B transcript 查 map 恢复 generationId; 空 map no-op)
         events = [to_event(r) for r in recs]
         sub_events = [e for e in events if e.get("recordType") == "SubagentCall"]
         topo = build_topology(sub_events)
         _rcs = root_context_samples(path) if root_context_samples else None   # 调一次: peak + sum 都取 (避免重复遍历 transcript; §8.3 + §7 计费口径)
+        _sid = os.path.basename(path)[:-len(".jsonl")] if path.endswith(".jsonl") else os.path.basename(path)
         per_session.append({
             "project": os.path.basename(os.path.dirname(path)),
-            "sid": os.path.basename(path)[:-len(".jsonl")] if path.endswith(".jsonl") else os.path.basename(path),
+            "sid": _sid,
+            "generationId": (sub_events[0].get("generationId") if sub_events else None) or _sid,   # Phase 3: map 覆盖后; 0-spawn/foreign → _sid (singleton)
             "path": path,
             "ctxPeak": (_rcs or {}).get("peak", 0),   # §8.3 root 主线 context 峰值 (Plan 3a 独立通道; bulletproof)
             "rootUsage": (_rcs or {}).get("sum"),   # §7 root 主线逐 turn 真实计费 sum (2026-06-19); None = 无 root transcript (live/jsonl 源) → perSession 行 fallback {0,0,0}
@@ -696,6 +787,7 @@ def aggregate_scan(per_session, errors, scan_dir, project):
             root_usage=m.get("rootUsage"),
             async_count=m.get("asyncCount", 0),
             tool_error_count=m.get("toolErrorCount", 0),   # §8.6 ✗ tool 失败 (root 主线; Mode A 走 _root_tool_errors, scan 走 mini-result toolErrorCount)
+            generation_id=m.get("generationId"),   # Phase 3 (§10.1): mini-result 透传 (post-map generationId)
         ) for m in scanned
     ]
     top_sessions = sorted(per_session_rows, key=lambda r: r["totalTokens"], reverse=True)[:10]
@@ -713,6 +805,7 @@ def aggregate_scan(per_session, errors, scan_dir, project):
         "callGraph": cg,
         "spawnsTotal": total_spawns,
         "perSession": per_session_rows,
+        "generations": aggregate_generations(per_session_rows),   # Phase 3 (§10.1): 同 generationId 跨 session 卷起 (multiSession=True 显续接); 全 singleton=今天行为
         "topSessions": top_sessions,
         "scanConsistency": {"allConsistent": len(violating) == 0, "violatingSessions": violating},
         "depth2Note": _DEPTH2_NOTE,
@@ -746,6 +839,13 @@ def render_scan(res):
             cons = "✓" if r["consistent"] else "✗"
             print(f"  {proj:<22}{sid:<14}{r['spawns']:>7}{r['totalTokens']:>13}"
                   f"{r['cacheReadPct']:>11}%{_fmt_dur(r['durationS']):>9}  {cons}")
+    gens = [g for g in res.get("generations", []) if g.get("multiSession")]
+    if gens:
+        print("\ngenerations (跨 session 续接 · multiSession, §10.1):")
+        for g in gens:
+            print(f"  {g['generationId']:<30}{g['sessionsN']:>3} sessions  "
+                  f"spawns={g['spawnsTotal']:>5}  total={g['grandTotal']['total']:>13}  "
+                  f"members: {', '.join(g['sessionIds'])}")
     gt = res["grandTotal"]
     print(f"\ncross-session totals: total={gt['total']} input={gt['input']} output={gt['output']} "
           f"cacheCreation={gt['cacheCreation']} cacheRead={gt['cacheRead']} "
@@ -784,6 +884,7 @@ def render_scan(res):
 def _mode_a_result(args):
     """Mode A (own-JSONL) / Mode B 单 transcript: 载入 → 聚合 → (result, topo).
     抽出供 one-shot 渲染 + --watch 循环复用 (DRY, E5 §8.8). 调用方须先保证 transcript adapter 可用."""
+    mapping, _generations_raw = load_generations_map()   # Phase 3: 全局 lineage map (一次; Mode B 查 map 恢复, Mode A live 通常 no-op 确认)
     if getattr(args, "transcript", None):
         records, nfiles, skipped = load_transcript(args)
         # 读端补全 (与 run_scan line 660 / live 同核, 单一计费口径): transcript 源的 async_launched 记录
@@ -795,6 +896,7 @@ def _mode_a_result(args):
     else:
         records, nfiles, skipped = load_records(args)
         records = _reconcile_live_records(records)   # 读端补全 (live 专用): async/historical 记录 → agent 文件终态累计 (单一计费口径)
+    _apply_generation_map(records, mapping)   # Phase 3: post-reconcile 缝合 (Mode B transcript 查 map; 空 map no-op)
     events = [to_event(r) for r in records]
     sub_events = [e for e in events if e.get("recordType") == "SubagentCall"]
     topo = build_topology(sub_events)
@@ -859,9 +961,11 @@ def _mode_a_result(args):
             root_usage=((_root_rcs or {}).get("sum") if sid == _root_sid else None),
             async_count=sum(1 for e in evs if e.get("status") == "async_launched" and e.get("capturePhase") != "complete"),
             tool_error_count=(_root_tool_errors if sid == _root_sid else 0),
+            generation_id=evs[0].get("generationId") or sid,   # Phase 3 (§10.1): evs 已带 map 覆盖后的 generationId; 缺→sid
         )
         for sid, evs in _by_sid.items()
     ]
+    result["generations"] = aggregate_generations(result["perSession"])   # Phase 3 (§10.1): live logdir 跨 session 同 carrier 时多 session 卷起; 单 session→singleton
     return result, topo
 
 

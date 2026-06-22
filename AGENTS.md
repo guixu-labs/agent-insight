@@ -20,7 +20,7 @@
 ## 红线(不可违背)
 
 1. **只量不动**——recorder 永不阻断编排。任何异常 swallow + `exit 0`,绝不 `exit 2`。观测失败 = 静默丢这条记录,编排照跑。
-2. **零耦合被动**——不改编排、不主动发事件,只挂全局 `PostToolUse` 收割。全工具唯一破此约定处是跨 session 续接的 carrier + lineage(`AGENTINSIGHT_CARRIER_*`,可选,未设则退化,尚未建满),其余全保持零耦合。
+2. **零耦合被动**——不改编排、不主动发事件,只挂全局 `PostToolUse` 收割。全工具唯一破此约定处是跨 session 续接的 carrier + lineage(`AGENTINSIGHT_CARRIER_*`,可选,未设则退化;lineage 缝合已建满,budgetState 跨 session persist 仍 defer),其余全保持零耦合。
 3. **别在用来开发本工具的 session 里注册真 hook**——写 `settings.json` hooks 块 / enable plugin = "注册"。**F7**:CC hook 配置 mid-session **不重载**,注册**不会**在当前 session 立即起火(要重启才生效),但**重启后即真 fire**。**⚠️ 若 repo 的 `.claude/settings.local.json` 已挂 hook 配置**,则在该 repo 工作的 session **就不是 inert**——Agent 调用会真 fire、落盘;开发期宜移除该配置(或明知只量不动)。三条底线:① `settings.json` 可能含 auth token、别直接挂 hook(**见红线 5**);② 开发 session 须干净可重复;③ live 验收在隔离 New Session 做。
 4. **不回退到旧 token 分析脚本**——本工具不复用任何要被替换掉的旧物。
 5. **绝不 cat `~/.claude/settings.json`**——可能含 auth token(红线文件)。查 hook 配置只导出 hooks 键:`python3 -c "import json;print(json.dumps(json.load(open('$HOME/.claude/settings.json')).get('hooks',{})))"`,或看项目级 `.claude/settings.local.json`。
@@ -41,10 +41,10 @@
 - `parentType` / `callChain` 是 **reader** 从 caller↔spawned 匹配派生的视图,不在线算。
 - "orchestrator" 是"caller 缺失 = 根"的角色标签,不是写死的 agent 名(零硬编码,从数据发现)。
 
-## 跨 session 续接(尚未建满)
+## 跨 session 续接(lineage 缝合已交付)
 
-- `generationId = effective_id`(carrier ? carrier : sessionId)。recorder 已盖,续接就绪;carrier 走 `AGENTINSIGHT_CARRIER_ID`(env)或 `AGENTINSIGHT_CARRIER_FILE`(handoff 文件),二选一、env 优先,未设则退化成 `sessionId`。
-- 完整续接(SessionStart hook + lineage log `generations.jsonl` + budgetState 跨 session persist)尚未交付。foreign session(没开本插件 hook)的离线续接须上层在 handoff 时落 lineage(最小契约 `{generationId, sessionId, ts}`),不落则 foreign 档离线缝不上、但不崩。
+- `generationId = effective_id`(carrier ? carrier : sessionId)。recorder 盖章 + reader 缝合(lineage)均已交付;carrier 走 `AGENTINSIGHT_CARRIER_ID`(env)或 `AGENTINSIGHT_CARRIER_FILE`(handoff 文件),二选一、env 优先,未设则退化成 `sessionId`。
+- lineage 缝合链路:SessionStart hook 写 `<log_base>/generations.jsonl`(base 根、跨 project 全局 `{sessionId→generationId}` 表)→ reader `load_generations_map` 读它 → `_apply_generation_map` 把 Mode B 记录 generationId post-ingest 覆盖 → `aggregate_generations` 按 generationId 卷 perSession 成 `result.generations`(multiSession 聚合);dashboard fleet 行带 gen-tag +「按 generation 分组」(默认关)。budgetState 跨 session persist 仍 defer。foreign session(没开本插件 hook)的离线续接须上层在 handoff 时落 lineage(最小契约 `{generationId, sessionId, ts}`,reader 亦兼容 breather writer),不落则 foreign 档离线缝不上、但不崩。
 - 续接机制是纯新设计——无先例兜底,唯一背书 = 已验证原型 + documented CC 原语。
 
 ## F 实证发现

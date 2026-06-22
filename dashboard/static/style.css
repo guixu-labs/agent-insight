@@ -143,6 +143,15 @@ tr.spotlight td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .spot-tag { font-size:10px; color:var(--amber); margin-left:6px; }
 tr.empty td { color:var(--faint); }
 .empty-tag { font-size:10px; color:var(--faint); margin-left:6px; font-style:italic; }
+/* Phase 3 跨 session 续接 (§10.1): generationId != sid (有 carrier 把多 session 缝合) → ⟿ 续接 tag; gen-group 分组头 */
+.gen-tag { display:inline-block; margin-left:6px; padding:0 6px; border:1px solid rgba(188,140,255,.45);
+  border-radius:10px; font:10px var(--mono); color:var(--purple); white-space:nowrap; }
+.gen-group-toggle { margin-left:auto; display:inline-flex; align-items:center; gap:5px;
+  font-size:11px; color:var(--muted); cursor:pointer; user-select:none; }
+.gen-group-toggle input { cursor:pointer; }
+#fleet-table tbody tr.gen-head td { background:rgba(188,140,255,.07); color:var(--purple);
+  font:11px var(--mono); border-top:1px solid rgba(188,140,255,.35); border-bottom:1px solid rgba(188,140,255,.18); }
+#fleet-table tbody tr.gen-head .gen-tag { border-color:transparent; padding:0; margin:0; }
 .pill { font-size:10px; padding:1px 8px; border-radius:9px; background:rgba(188,140,255,.12);
         color:var(--purple); border:1px solid rgba(188,140,255,.3); font-family:var(--sans); white-space:nowrap; }
 .badge { font-weight:700; }

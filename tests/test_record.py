@@ -64,6 +64,30 @@ def read_jsonl():
     return rows
 
 
+def read_lineage():
+    """读 TMP/generations.jsonl (base 根 lineage 映射, §10.1; 非 project 子目录). 返回行列表."""
+    path = os.path.join(TMP, "generations.jsonl")
+    rows = []
+    if os.path.exists(path):
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    rows.append(json.loads(line))
+    return rows
+
+
+def run_record_proc(payload, carriers=None, extra=None):
+    """隔离 env 调 record.py, 返回完整 process (含 .returncode/.stdout). 供 stdout 断言用 (组13)."""
+    env = {"AGENTINSIGHT_LOG_DIR": TMP, "PATH": os.environ.get("PATH", "")}
+    if carriers:
+        env.update(carriers)
+    if extra:
+        env.update(extra)
+    return subprocess.run([sys.executable, RECORD], input=json.dumps(payload),
+                          capture_output=True, text=True, env=env)
+
+
 def reset():
     global TMP
     if TMP and os.path.exists(TMP):
@@ -221,6 +245,106 @@ reset()
 rc = run_record({"tool_name": "Read", "session_id": "s", "cwd": "/p"})
 check("Read: 不落盘", len(read_jsonl()) == 0, len(read_jsonl()))
 check("Read: exit 0", rc == 0, rc)
+
+# ===== 组9 SessionStart — carrier 三路 (env / handoff / inert) =====
+print("\n[组9] SessionStart lineage — carrier 三路 (env / handoff-file / inert fallback)")
+reset()
+# 9a env carrier
+rc = run_record({"hook_event_name": "SessionStart", "session_id": "s1",
+                 "cwd": "/home/qwren/demo", "source": "startup"},
+                carriers={"AGENTINSIGHT_CARRIER_ID": "g-env"})
+check("SessionStart env: exit 0", rc == 0, rc)
+check("SessionStart env: per-event log 无污染 (无 SubagentCall)", len(read_jsonl()) == 0, len(read_jsonl()))
+rows = read_lineage()
+check("SessionStart env: generations.jsonl 1 行", len(rows) == 1, len(rows))
+r = rows[0] if rows else {}
+check("SessionStart env: recordType=GenerationLineage", r.get("recordType") == "GenerationLineage", r.get("recordType"))
+check("SessionStart env: generationId=g-env", r.get("generationId") == "g-env", r.get("generationId"))
+check("SessionStart env: sessionId=s1", r.get("sessionId") == "s1", r.get("sessionId"))
+check("SessionStart env: carrierSource=env", r.get("carrierSource") == "env", r.get("carrierSource"))
+check("SessionStart env: source=startup", r.get("source") == "startup", r.get("source"))
+check("SessionStart env: writer=plugin-hook", r.get("writer") == "plugin-hook", r.get("writer"))
+check("SessionStart env: projectName=demo (cwd basename)", r.get("projectName") == "demo", r.get("projectName"))
+# 9b handoff 文件 carrier
+reset()
+hf = os.path.join(TMP, "handoff.json")
+with open(hf, "w") as f:
+    json.dump({"generationId": "g-file", "other": "..."}, f)
+run_record({"hook_event_name": "SessionStart", "session_id": "s2", "cwd": "/p", "source": "resume"},
+           carriers={"AGENTINSIGHT_CARRIER_FILE": hf})
+r = read_lineage()[0]
+check("SessionStart handoff: generationId=g-file", r.get("generationId") == "g-file", r.get("generationId"))
+check("SessionStart handoff: carrierSource=handoff-file", r.get("carrierSource") == "handoff-file", r.get("carrierSource"))
+check("SessionStart handoff: source=resume", r.get("source") == "resume", r.get("source"))
+# 9c inert (无 carrier)
+reset()
+run_record({"hook_event_name": "SessionStart", "session_id": "s-solo", "cwd": "/p"})
+r = read_lineage()[0]
+check("SessionStart inert: generationId=sessionId", r.get("generationId") == "s-solo", r.get("generationId"))
+check("SessionStart inert: carrierSource=null", r.get("carrierSource") is None, r.get("carrierSource"))
+check("SessionStart inert: source=null (payload 无 source)", r.get("source") is None, r.get("source"))
+
+# ===== 组10 SessionStart 4 源全 fire =====
+print("\n[组10] SessionStart 4 源全 fire (startup/resume/clear/compact)")
+reset()
+for src in ["startup", "resume", "clear", "compact"]:
+    run_record({"hook_event_name": "SessionStart", "session_id": f"s-{src}",
+                "cwd": "/p", "source": src})
+rows = read_lineage()
+check("4 源各写 1 行 (共 4)", len(rows) == 4, len(rows))
+got_sources = sorted(r.get("source") for r in rows)
+check("4 源 source 字段全记对", got_sources == ["clear", "compact", "resume", "startup"], got_sources)
+
+# ===== 组11 env carrier 优先 handoff 文件 =====
+print("\n[组11] SessionStart — env carrier 优先 handoff 文件 (read_carrier 复用)")
+reset()
+hf = os.path.join(TMP, "handoff.json")
+with open(hf, "w") as f:
+    json.dump({"generationId": "g-file"}, f)
+run_record({"hook_event_name": "SessionStart", "session_id": "s-both", "cwd": "/p", "source": "startup"},
+           carriers={"AGENTINSIGHT_CARRIER_ID": "g-env", "AGENTINSIGHT_CARRIER_FILE": hf})
+r = read_lineage()[0]
+check("env+handoff 同设: env 赢 (generationId=g-env)", r.get("generationId") == "g-env", r.get("generationId"))
+check("env+handoff 同设: carrierSource=env", r.get("carrierSource") == "env", r.get("carrierSource"))
+
+# ===== 组12 generations.jsonl 位置 + append (base 根, 非 project 子目录) =====
+print("\n[组12] generations.jsonl — base 根放置 + 连发 append (异 session 同 carrier)")
+reset()
+run_record({"hook_event_name": "SessionStart", "session_id": "sess-A", "cwd": "/projA", "source": "startup"},
+           carriers={"AGENTINSIGHT_CARRIER_ID": "g-shared"})
+run_record({"hook_event_name": "SessionStart", "session_id": "sess-B", "cwd": "/projB", "source": "startup"},
+           carriers={"AGENTINSIGHT_CARRIER_ID": "g-shared"})
+rows = read_lineage()
+check("连发两 SessionStart: generations.jsonl 2 行", len(rows) == 2, len(rows))
+check("两行同 carrier (缝合前提)", all(r.get("generationId") == "g-shared" for r in rows),
+      [r.get("generationId") for r in rows])
+check("两行 sessionId 各异 (sess-A/sess-B)", sorted(r.get("sessionId") for r in rows) == ["sess-A", "sess-B"],
+      [r.get("sessionId") for r in rows])
+check("base 根放置: <TMP>/generations.jsonl 存在", os.path.exists(os.path.join(TMP, "generations.jsonl")))
+check("非 project 子目录: <TMP>/projA/generations.jsonl 不存在 (lineage 不按 project 分)",
+      not os.path.exists(os.path.join(TMP, "projA", "generations.jsonl")))
+check("lineage 不污染 per-event log (两 SessionStart 仍无 SubagentCall)", len(read_jsonl()) == 0, len(read_jsonl()))
+
+# ===== 组13 SessionStart 红线 (不阻断 + 不注 additionalContext) =====
+print("\n[组13] SessionStart 红线 — 烂 stdin/缺字段 exit 0; stdout 空 (不注 additionalContext)")
+reset()
+# 13a 烂 stdin → 第一道 try 拦截 → exit 0, 无 lineage
+p = subprocess.run([sys.executable, RECORD], input="not json",
+                   capture_output=True, text=True,
+                   env={"AGENTINSIGHT_LOG_DIR": TMP, "PATH": os.environ.get("PATH", "")})
+check("烂 stdin: exit 0", p.returncode == 0, p.returncode)
+check("烂 stdin: 无 lineage 落盘", len(read_lineage()) == 0, len(read_lineage()))
+# 13b 缺 session_id → 不崩, 退化 unknown-session, exit 0
+rc = run_record({"hook_event_name": "SessionStart", "cwd": "/p", "source": "startup"})
+check("缺 session_id: exit 0 (不阻断)", rc == 0, rc)
+r = read_lineage()[0]
+check("缺 session_id: sessionId=unknown-session", r.get("sessionId") == "unknown-session", r.get("sessionId"))
+# 13c stdout 空 (observe-only 红线 2: 不向 Claude 注 additionalContext)
+reset()
+p = run_record_proc({"hook_event_name": "SessionStart", "session_id": "s-stdout", "cwd": "/p", "source": "startup"})
+check("SessionStart: stdout 空 (不注 additionalContext, 红线 2)", p.stdout.strip() == "", repr(p.stdout))
+check("SessionStart: exit 0", p.returncode == 0, p.returncode)
+check("SessionStart: lineage 仍落 (副作用生效)", len(read_lineage()) == 1, len(read_lineage()))
 
 # ===== 收尾 =====
 print("\n" + "=" * 70)

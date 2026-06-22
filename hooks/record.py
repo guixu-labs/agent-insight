@@ -64,12 +64,18 @@ def _project_name(cwd):
     return "default"
 
 
-def _log_dir(cwd):
-    """logDir 优先级: env AGENTINSIGHT_LOG_DIR > CLAUDE_PLUGIN_DATA > ~/.claude/agent-insight."""
-    base = (os.environ.get("AGENTINSIGHT_LOG_DIR", "").strip()
+def _log_base():
+    """log 根目录 (无 project 子目录): AGENTINSIGHT_LOG_DIR > CLAUDE_PLUGIN_DATA > ~/.claude/agent-insight.
+    全局/跨 project 文件 (generations.jsonl lineage 映射, §10.1) 用此 — 与 _log_dir 同优先级, 仅去 project join.
+    (carrier 是 cwd 无关的 env, lineage 映射跨 project, 故放 base 根非 project 子目录.)"""
+    return (os.environ.get("AGENTINSIGHT_LOG_DIR", "").strip()
             or os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
             or os.path.expanduser("~/.claude/agent-insight"))
-    return os.path.join(base, _project_name(cwd))
+
+
+def _log_dir(cwd):
+    """logDir = _log_base() + project 子目录 (按 project 分组). 优先级见 _log_base."""
+    return os.path.join(_log_base(), _project_name(cwd))
 
 
 def write_record(record, cwd):
@@ -78,6 +84,26 @@ def write_record(record, cwd):
     os.makedirs(d, exist_ok=True)
     fname = datetime.now(_TZ).strftime("%Y-%m-%d") + ".jsonl"
     path = os.path.join(d, fname)
+    lock_path = path + ".lock"
+    line = json.dumps(record, ensure_ascii=False)
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            with open(path, "a") as f:
+                f.write(line + "\n")
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def write_lineage(record):
+    """flock 保护下 append 一行到 <log_base>/generations.jsonl (跨 session lineage 映射, §10.1).
+
+    write_record 的兄弟 (同 flock 模式: lock_path sidecar + LOCK_EX + append 'a' + finally LOCK_UN);
+    区别: 落 base 根 (非 project 子目录) — {sessionId → generationId} 是全局跨 project 映射
+    (carrier cwd 无关; Mode B scan 也跨 project 读此一张表). append-only, reader 每次 log 重建 map."""
+    base = _log_base()
+    os.makedirs(base, exist_ok=True)
+    path = os.path.join(base, "generations.jsonl")
     lock_path = path + ".lock"
     line = json.dumps(record, ensure_ascii=False)
     with open(lock_path, "a") as lock:
@@ -299,6 +325,38 @@ def record_bash(data):
     return rec
 
 
+def record_session_start(data):
+    """SessionStart hook → GenerationLineage lineage 行 (§10.1 跨 session 续接).
+
+    读 carrier (复用 read_carrier) → effective_id, append 全局 generations.jsonl.
+    {sessionId → generationId} 映射的 append-only 源; reader (analyze.py load_generations_map) 据此缝合
+    跨 session. 复用 read_carrier 的 carrier 双通路 (env > handoff-file > inert).
+
+    纯副作用 (observe-only, 红线 2): 不落 SubagentCall、不向 Claude 注 additionalContext.
+      Future opt-in seam (不接活): 若 AGENTINSIGHT_INJECT_CONTEXT=1, 可 echo
+        {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}
+      回 CC — 当前默认关, 保只量不动.
+    budgetState 不动 (本期 Phase 3 只做 lineage 缝合; 阈值/累加器 defer, record.py 仍 None).
+
+    不调 _common() — 那个建 SubagentCall 形状 (caller/spawned/budgetState), 非 lineage 行形状;
+    effective_id 在此一行复刻 (= carrier ? carrier : sessionId, 与 _common L97-98 同口径)."""
+    session_id = data.get("session_id", "") or "unknown-session"
+    carrier, carrier_src = read_carrier()           # 复用 (env > handoff-file > None)
+    effective_id = carrier if carrier else session_id
+    write_lineage({
+        "schemaVersion": 1,
+        "recordType": "GenerationLineage",
+        "timestamp": datetime.now(_TZ).isoformat(timespec="seconds"),
+        "generationId": effective_id,               # effective_id = carrier ? carrier : sessionId (续接就绪)
+        "sessionId": session_id,
+        "carrierSource": carrier_src,               # 诊断: env / handoff-file / null
+        "source": data.get("source") or None,       # CC payload.source: startup/resume/clear/compact; 缺则 None (Breather 写无此字段)
+        "writer": "plugin-hook",                    # 区分 Breather 自助写的行 (reader 两 writer 都容错)
+        "projectName": _project_name(data.get("cwd", "") or ""),
+        # prevSessionId: Breather seam (有序链 / wall-clock gap); plugin-hook 不落 — reader 读到就有.
+    })
+
+
 # ---------- 主入口 ----------
 def main():
     try:
@@ -306,9 +364,14 @@ def main():
     except Exception:
         sys.exit(0)   # 烂 stdin: 静默 no-op, 不阻断
 
-    tool_name = data.get("tool_name", "") or ""
-
     try:
+        # Phase 3: SessionStart lineage 缝合 (§10.1). SessionStart payload 无 tool_name (今天会落到下面
+        # else: exit 0 静默 no-op); 按 hook_event_name 早返回. PostToolUse 也带 hook_event_name 但值="PostToolUse",
+        # 故 == "SessionStart" 永不误中 PostToolUse → 三轨路径零回归. record_session_start 异常被本 try/except 吞 → exit 0 (红线 1).
+        if data.get("hook_event_name") == "SessionStart":
+            record_session_start(data)
+            sys.exit(0)   # 纯副作用, 不落 SubagentCall, 永不阻断
+        tool_name = data.get("tool_name", "") or ""
         if tool_name == "Agent":
             rec = record_agent(data)
         elif tool_name == "Skill":

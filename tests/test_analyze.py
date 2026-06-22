@@ -365,10 +365,10 @@ ps = res.get("perSession", [])
 check("perSession 存在", isinstance(ps, list), type(ps))
 check("perSession len==2 (2 session)", len(ps) == 2, len(ps))
 
-EXPECTED_KEYS = {"project", "sid", "spawns", "totalTokens", "cacheReadPct",
+EXPECTED_KEYS = {"project", "sid", "generationId", "spawns", "totalTokens", "cacheReadPct",
                  "durationS", "consistent", "modeLabel", "grandTotal", "ctxPeak",
                  "ctxLimitErrors", "rootUsage", "asyncCount", "toolErrorCount"}
-check("每行 keys 集合 == app.js 契约 (14 字段, 含 asyncCount+toolErrorCount; 无漂移)",
+check("每行 keys 集合 == app.js 契约 (15 字段, 含 generationId+asyncCount+toolErrorCount; 无漂移)",
       all(set(r.keys()) == EXPECTED_KEYS for r in ps), [sorted(r.keys()) for r in ps])
 
 by_sid = {r["sid"]: r for r in ps}
@@ -439,6 +439,108 @@ check("--watch 进循环 (rc==124 timeout 杀, 非 rc==2 argparse 拒绝)",
       pw.returncode == 124, f"rc={pw.returncode} stderr={pw.stderr[:200]}")
 check("--watch 循环期无 argparse usage 错", "usage:" not in pw.stderr, pw.stderr[:200])
 shutil.rmtree(wd, ignore_errors=True)
+
+# ===== 组14 · Phase 3 load_generations_map (§10.1 lineage 载入, inert-safe 纯函数) =====
+print("\n[组14] load_generations_map — 缺文件/坏行/Breather 形/last-writer-wins 容错")
+sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+import analyze as _az   # 直接 import 测纯函数 (subprocess 跑 CLI 见组1-13); analyze import 已含 try/except 守卫
+_gd = tempfile.mkdtemp(prefix="obs-gen-")
+# 14a 缺文件 → ({}, [])
+m, raw = _az.load_generations_map(log_base=_gd)
+check("缺文件 → 空 map + 空 raw", m == {} and raw == [], (m, raw))
+# 14b well-formed → 正确映射 (两 sid 同 gid = 缝合前提)
+_gp = os.path.join(_gd, "generations.jsonl")
+with open(_gp, "w") as f:
+    f.write(json.dumps({"recordType": "GenerationLineage", "sessionId": "s1", "generationId": "g1",
+                        "carrierSource": "env", "source": "startup", "writer": "plugin-hook"}) + "\n")
+    f.write(json.dumps({"recordType": "GenerationLineage", "sessionId": "s2", "generationId": "g1",
+                        "carrierSource": "env", "source": "resume", "writer": "plugin-hook"}) + "\n")
+m, raw = _az.load_generations_map(log_base=_gd)
+check("well-formed: 2 sid → 同 g1", m == {"s1": "g1", "s2": "g1"}, m)
+check("well-formed: raw 2 行", len(raw) == 2, len(raw))
+# 14c 坏行混好行 → 跳坏不抛
+with open(_gp, "w") as f:
+    f.write("not json\n")                                          # 非法 JSON → 跳
+    f.write(json.dumps({"sessionId": "s3", "generationId": "g3"}) + "\n")   # 好行
+    f.write(json.dumps({"generationId": "gX"}) + "\n")             # 无 sessionId → 跳
+    f.write(json.dumps({"sessionId": "s4", "generationId": "g4", "extra": "ignored"}) + "\n")  # 好行, 未知字段忽略
+m, raw = _az.load_generations_map(log_base=_gd)
+check("坏行跳过不抛: 只 s3/s4 进 map", m == {"s3": "g3", "s4": "g4"}, m)
+check("坏行跳过: raw 只含 2 好行 dict", len(raw) == 2, len(raw))
+# 14d Breather 形 (ts/prevSessionId/writer=breather) 容错 — reader 不要求 plugin-hook
+with open(_gp, "w") as f:
+    f.write(json.dumps({"generationId": "gB", "sessionId": "sB", "writer": "breather",
+                        "ts": "2026-06-22T10:00:00Z", "prevSessionId": "sA"}) + "\n")
+m, raw = _az.load_generations_map(log_base=_gd)
+check("Breather 形 (ts/prevSessionId/writer=breather) 容错", m == {"sB": "gB"}, m)
+# 14e last-writer-wins: 同 sid 两行, 后盖前 (Breather 应盖 plugin-hook)
+with open(_gp, "w") as f:
+    f.write(json.dumps({"sessionId": "sX", "generationId": "g-old", "writer": "plugin-hook"}) + "\n")
+    f.write(json.dumps({"sessionId": "sX", "generationId": "g-new", "writer": "breather"}) + "\n")
+m, _r = _az.load_generations_map(log_base=_gd)
+check("last-writer-wins: 同 sid 后写盖前", m.get("sX") == "g-new", m)
+shutil.rmtree(_gd, ignore_errors=True)
+
+# ===== 组15 · Phase 3 _apply_generation_map (post-ingest 缝合, 就地改 records) =====
+print("\n[组15] _apply_generation_map — Mode B 查 map 恢复; 空 map no-op; 不覆盖已有 carrierSource")
+# 15a 空 map → 不动 (今天行为, inert-safe)
+recs = [{"sessionId": "s1", "generationId": "s1", "carrierSource": None},
+        {"sessionId": "s2", "generationId": "s2", "carrierSource": None}]
+_az._apply_generation_map(recs, {})
+check("空 map: generationId 仍=sid", all(r["generationId"] == r["sessionId"] for r in recs), recs)
+check("空 map: carrierSource 仍 None", all(r["carrierSource"] is None for r in recs), recs)
+# 15b 命中 map → 覆盖 generationId + carrierSource=lineage-map (仅命中的); 未命中不动
+recs = [{"sessionId": "s1", "generationId": "s1", "carrierSource": None},
+        {"sessionId": "s2", "generationId": "s2", "carrierSource": None}]
+_az._apply_generation_map(recs, {"s1": "g-shared"})
+check("命中 s1: generationId=g-shared", recs[0]["generationId"] == "g-shared", recs[0])
+check("命中 s1: carrierSource=lineage-map", recs[0]["carrierSource"] == "lineage-map", recs[0])
+check("未命中 s2: generationId 仍=s2", recs[1]["generationId"] == "s2", recs[1])
+check("未命中 s2: carrierSource 仍 None", recs[1]["carrierSource"] is None, recs[1])
+# 15c 已有 carrierSource 不被覆盖 (只补空 carrierSource)
+recs = [{"sessionId": "s1", "generationId": "s1", "carrierSource": "env"}]
+_az._apply_generation_map(recs, {"s1": "g-x"})
+check("命中但原 carrierSource=env: 保 env 不覆盖", recs[0]["carrierSource"] == "env", recs[0])
+check("命中但原 carrierSource=env: generationId 仍覆盖", recs[0]["generationId"] == "g-x", recs[0])
+# 15d Mode A live 形 (generationId 已=carrier 值, 与 map 同) → no-op 确认 (不重置 carrierSource)
+recs = [{"sessionId": "s1", "generationId": "g-live", "carrierSource": "env"}]
+_az._apply_generation_map(recs, {"s1": "g-live"})
+check("Mode A live 值==map 值: generationId no-op", recs[0]["generationId"] == "g-live", recs[0])
+check("Mode A live 值==map 值: carrierSource 保 env", recs[0]["carrierSource"] == "env", recs[0])
+
+# ===== 组16 · Phase 3 aggregate_generations (跨 session 卷起 + singleton 回退) =====
+print("\n[组16] aggregate_generations — 同 generationId 卷起; 全 singleton=今天行为")
+def _psrow(sid, gid, spawns, total, dur_s):
+    """合成 per_session_row (只填 aggregate_generations 用到的字段)."""
+    return {"sid": sid, "generationId": gid, "spawns": spawns,
+            "grandTotal": {"input": 0, "output": 0, "cacheCreation": 0, "cacheRead": 0, "total": total},
+            "durationS": dur_s}
+# 16a 两 session 共享 gid + 一个 singleton → 2 generation
+rows = [_psrow("s1", "g-shared", 3, 1000, 10.0),
+        _psrow("s2", "g-shared", 5, 2000, 20.0),
+        _psrow("s-solo", "s-solo", 2, 500, 5.0)]   # gid==sid → singleton
+gens = _az.aggregate_generations(rows)
+check("2 generation (一 shared 一 singleton)", len(gens) == 2, len(gens))
+by_gid = {g["generationId"]: g for g in gens}
+shared = by_gid["g-shared"]
+check("shared multiSession=True", shared["multiSession"] is True, shared)
+check("shared sessionsN=2", shared["sessionsN"] == 2, shared)
+check("shared sessionIds=[s1,s2]", shared["sessionIds"] == ["s1", "s2"], shared)
+check("shared spawnsTotal=8 (3+5)", shared["spawnsTotal"] == 8, shared)
+check("shared grandTotal.total=3000 (1000+2000)", shared["grandTotal"]["total"] == 3000, shared["grandTotal"])
+check("shared durationS=30.0 (10+20)", shared["durationS"] == 30.0, shared["durationS"])
+solo = by_gid["s-solo"]
+check("singleton multiSession=False", solo["multiSession"] is False, solo)
+check("singleton sessionsN=1", solo["sessionsN"] == 1, solo)
+# 16b 按 grandTotal.total 降序 (shared 3000 > solo 500)
+check("降序: shared(3000) 在前", gens[0]["generationId"] == "g-shared", [g["generationId"] for g in gens])
+# 16c inert (全 gid==sid) → 全 singleton, 今天行为
+gens_inert = _az.aggregate_generations([_psrow("a", "a", 1, 100, 1.0), _psrow("b", "b", 1, 200, 2.0)])
+check("inert (全 gid==sid): 全 singleton", all(not g["multiSession"] for g in gens_inert),
+      [g["multiSession"] for g in gens_inert])
+check("inert: 2 generation", len(gens_inert) == 2, len(gens_inert))
+# 16d 空 per_session_rows → []
+check("空 per_session_rows → []", _az.aggregate_generations([]) == [], "non-empty")
 
 # ===== 收尾 =====
 print("\n" + "=" * 70)

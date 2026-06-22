@@ -231,7 +231,8 @@ def test_live_source():
             check(r0.get("totalTokens") == 350, "D10 live perSession totalTokens == 350")
             check(r0.get("project") == "demo-live", "D10 live perSession project == demo-live")
             # 字段集与 offline (Mode B perSession) 逐字段一致 → dashboard 同形渲染 (§9 双数据源)
-            expect = {"project", "sid", "spawns", "totalTokens", "cacheReadPct",
+            # Phase 3: +generationId (跨 session 续接 effective_id; == sid 则无 carrier). 契约 14→15.
+            expect = {"project", "sid", "generationId", "spawns", "totalTokens", "cacheReadPct",
                       "durationS", "consistent", "modeLabel", "grandTotal", "ctxPeak",
                       "ctxLimitErrors", "rootUsage", "asyncCount", "toolErrorCount"}
             check(set(r0.keys()) == expect, "D10 live perSession 字段集 == Mode B 契约 (双数据源同形)")
@@ -2522,6 +2523,28 @@ def test_root_detail_frontend():
     check('@keyframes agent-flash' in css, "DR8 @keyframes agent-flash 已存 (复用, 非新 keyframes)")
 
 
+def test_generation_tag_frontend():
+    """Phase 3 跨 session 续接 (§10.1) dashboard 轻量: gen-tag + gen-group 分组的前端契约.
+    镜像 D12/DR8 静态文件读法 — 读 index.html/app.js/style.css 源, 断言续接可见产物落地
+    (generationId != sid → ⟿ 续接 tag; #gen-group 勾选 → multiSession 折进一组).
+    前端无 headless browser → 只验源码契约 (逻辑在 fleetRow + gen-group 分派)."""
+    html = open(os.path.join(HERE, "..", "dashboard", "static", "index.html")).read()
+    appjs = open(os.path.join(HERE, "..", "dashboard", "static", "app.js")).read()
+    css = open(os.path.join(HERE, "..", "dashboard", "static", "style.css")).read()
+    # index.html: #gen-group checkbox 在 by-session sec-head (默认关 → 零视觉回归)
+    check('id="gen-group"' in html, "DG1 index.html 含 #gen-group checkbox (按 generation 分组开关)")
+    check("gen-group-toggle" in html, "DG1 index.html checkbox 带 .gen-group-toggle label")
+    # app.js: gen-tag 仅在 generationId != sid (有 carrier 缝合) 时显; gen-group 分派消费 result.generations
+    check("gen-tag" in appjs, "DG2 app.js 含 .gen-tag 发射 (跨 session 续接标签)")
+    check("r.generationId !== r.sid" in appjs, "DG2 app.js gen-tag 仅 generationId != sid 时显 (无 carrier 不显)")
+    check("result.generations" in appjs, "DG2 app.js 消费 result.generations (跨 session 卷起数组)")
+    check('"gen-head"' in appjs, "DG2 app.js 含 gen-head 组头行 (multiSession 分组头)")
+    # style.css: gen-tag / gen-group-toggle / gen-head 三规则
+    check(".gen-tag" in css, "DG3 style.css 含 .gen-tag 规则")
+    check(".gen-group-toggle" in css, "DG3 style.css 含 .gen-group-toggle 规则")
+    check("tr.gen-head" in css, "DG3 style.css 含 tr.gen-head 规则 (分组头行)")
+
+
 if __name__ == "__main__":
     test_api_result_file_source()
     test_static_routes_and_scaffolding()
@@ -2581,4 +2604,5 @@ if __name__ == "__main__":
     test_root_observability()
     test_root_detail_route()
     test_root_detail_frontend()
+    test_generation_tag_frontend()
     print(f"\n{PASSED} PASS / 0 FAIL")
