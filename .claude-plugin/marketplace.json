@@ -1,0 +1,14 @@
+{
+  "name": "agent-insight",
+  "owner": {
+    "name": "agent-insight contributors"
+  },
+  "description": "通用 agent / subagent 编排可观测性 Claude Code 插件 marketplace。",
+  "plugins": [
+    {
+      "name": "agent-insight",
+      "source": "./",
+      "description": "被动 PostToolUse hook 记录 per-subagent token / 时延 / 成败 / Skill 使用,落滚动 JSONL,自带 reader + 浏览器 dashboard。opt-in、零耦合、只量不动。"
+    }
+  ]
+}
