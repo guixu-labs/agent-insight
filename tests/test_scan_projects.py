@@ -461,6 +461,44 @@ shutil.rmtree(d, ignore_errors=True)
 shutil.rmtree(log_base, ignore_errors=True)
 
 
+# ===== S17 Phase 3 0-spawn session 也缝合 (generations.jsonl 有 SID_B 但其 transcript 无 Agent 调用 → 仍回填 generationId; run_scan L748 mapping.get(sid) 回填) =====
+print("\n[S17] 0-spawn session 缝合 — generations.jsonl 有 SID_B 但 transcript 无 Agent 调用 → 仍回填 generationId (复刻真数据 be063d03→test-gen-1)")
+d = tempfile.mkdtemp(prefix="obs-scan-s17-")
+build_session(d, "fleet", SID_A, [agent_line("a1", total_tokens=1000)])   # 正常 1-spawn session
+# SID_B: 纯对话 0-spawn session (无 Agent tool_use) — 复刻 be063d03 (0 Agent 调用, 0 token)
+_zero_spawn_root = [json.dumps({"type": "user", "message": {"role": "user", "content": "ping"}}, ensure_ascii=False),
+                    json.dumps({"type": "assistant", "message": {"role": "assistant",
+                                 "content": [{"type": "text", "text": "pong"}]}}, ensure_ascii=False)]
+build_session(d, "fleet", SID_B, _zero_spawn_root)
+log_base = tempfile.mkdtemp(prefix="obs-scan-s17-glb-")
+with open(os.path.join(log_base, "generations.jsonl"), "w") as f:   # 两 sid 都入 map → 同 g-task (B 虽 0-record 也在表里)
+    f.write(json.dumps({"schemaVersion": 1, "recordType": "GenerationLineage",
+                        "sessionId": SID_A, "generationId": "g-task", "carrierSource": "env",
+                        "source": "startup", "writer": "plugin-hook"}) + "\n")
+    f.write(json.dumps({"schemaVersion": 1, "recordType": "GenerationLineage",
+                        "sessionId": SID_B, "generationId": "g-task", "carrierSource": "env",
+                        "source": "resume", "writer": "plugin-hook"}) + "\n")
+env = {**os.environ, "AGENTINSIGHT_LOG_DIR": log_base}
+res = run_scan(d, env=env)
+check("exit 0", res.get("_rc") == 0, res.get("_stderr"))
+ps_map = {r["sid"]: r for r in res.get("perSession", [])}
+check("perSession=2 (0-spawn session 也有行)", len(ps_map) == 2, list(ps_map.keys()))
+check("SID_B spawns=0 (真 0-spawn, 非 scan 漏读)", ps_map.get(SID_B, {}).get("spawns") == 0, ps_map.get(SID_B, {}).get("spawns"))
+check("SID_B generationId=g-task (0-spawn 也回填, 不退化 sid — L748 mapping.get(sid) 修)",
+      ps_map.get(SID_B, {}).get("generationId") == "g-task", ps_map.get(SID_B, {}).get("generationId"))
+check("SID_A generationId=g-task (有 record 的不变)", ps_map.get(SID_A, {}).get("generationId") == "g-task", ps_map.get(SID_A, {}).get("generationId"))
+gens = res.get("generations", [])
+multi = [g for g in gens if g.get("multiSession")]
+mg = multi[0] if multi else {}
+check("1 条 multiSession generation (0-spawn session 也卷进)", len(multi) == 1, [g.get("generationId") for g in gens])
+check("multiSession sessionsN=2 (含 0-spawn session)", mg.get("sessionsN") == 2, mg)
+check("multiSession sessionIds=[A,B]", set(mg.get("sessionIds", [])) == {SID_A, SID_B}, mg)
+check("multiSession grandTotal.total=1000 (0-spawn session 贡献 0, 计费核红线 6 不受影响)",
+      mg.get("grandTotal", {}).get("total") == 1000, mg.get("grandTotal"))
+shutil.rmtree(d, ignore_errors=True)
+shutil.rmtree(log_base, ignore_errors=True)
+
+
 # ===== 收尾 =====
 print("\n" + "=" * 70)
 print(f"结果: {passed} PASS / {failed} FAIL")

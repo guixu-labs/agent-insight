@@ -745,7 +745,7 @@ def run_scan(args):
         per_session.append({
             "project": os.path.basename(os.path.dirname(path)),
             "sid": _sid,
-            "generationId": (sub_events[0].get("generationId") if sub_events else None) or _sid,   # Phase 3: map 覆盖后; 0-spawn/foreign → _sid (singleton)
+            "generationId": (sub_events[0].get("generationId") if sub_events else None) or mapping.get(_sid) or _sid,   # Phase 3: map 覆盖后; 0-spawn session 查 lineage map 回填 generationId (空 session 也归其 generation, 不漏缝合); foreign/无 lineage → _sid (singleton)
             "path": path,
             "ctxPeak": (_rcs or {}).get("peak", 0),   # §8.3 root 主线 context 峰值 (Plan 3a 独立通道; bulletproof)
             "rootUsage": (_rcs or {}).get("sum"),   # §7 root 主线逐 turn 真实计费 sum (2026-06-19); None = 无 root transcript (live/jsonl 源) → perSession 行 fallback {0,0,0}
