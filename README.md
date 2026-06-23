@@ -29,6 +29,7 @@ Claude Code 跑一个大任务会派出一堆 subagent,但你看不到:
 | **dashboard Level ① fleet**(hero cache + fleet 表 + by-skill + topology + trust 闸) | ✅ 已交付 |
 | **live 源 + live-tail**(mtime-poll 自动 refresh + 前端 2s 轮询) | ✅ 已交付 |
 | **运行时数据源切换器**(不重启 server 切 scan/live/自定义) | ✅ 已交付 |
+| **深色/浅色主题切换**(右上按钮 · 记住选择) | ✅ 已交付(默认深色 · GitHub Light 同源 · localStorage 记忆) |
 | **`/insight` 主动入口**(slash command) | 🔧 待加(见 [commands/](commands/)) |
 | Level ② session 编排视图 + hero context 半边 | ✅ 已交付(点行 → 单 session → spawn/turn;hero 双面板含 root ctx 峰值) |
 | 跨 session 续接(SessionStart hook + lineage 缝合) | ✅ 已交付(lineage 缝合建满;budgetState defer) |
@@ -171,6 +172,8 @@ python3 tools/analyze.py --scan-projects --json
 ## dashboard(浏览器 · Level ① fleet)
 
 薄 stdlib HTTP server 喂 `analyze.py --json` 产物,静态 HTML/JS 渲染 fleet 总览(hero cache 半边 + fleet 表 + by-skill 切面 + topology + trust 闸)。零外部依赖、资产 vendored 无 CDN。
+
+**深色/浅色主题**:右上角 ☀️ / 🌙 按钮切换。**默认深色**;切到浅色(GitHub Light 同源调色)后选择记在浏览器 `localStorage`,刷新记住——不跟随系统。清掉 `localStorage` 的 `ai-theme` 即恢复默认深色。
 
 ```bash
 # 默认 scan 源(扫 ~/.claude/projects)

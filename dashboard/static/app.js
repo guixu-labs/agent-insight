@@ -1344,6 +1344,26 @@ function initLiveTail() {
   start();   // 默认开
 }
 
+// === 主题切换 (深/浅) · 2026-06-23 · <head> inline 脚本首帧前已按 localStorage / 系统偏好设好 data-theme (防 FOUC);
+//     这里只接按钮: 点 → 切 data-theme + 记 localStorage['ai-theme'] + 同步图标. 图标显目标态 (深→☀️ 浅→🌙).
+function initTheme() {
+  const btn = document.getElementById("theme-toggle");
+  if (!btn) return;
+  const ICON = { dark: "☀️", light: "🌙" };   // 显目标态: 当前深显☀️(点切浅), 当前浅显🌙(点切深)
+  const sync = () => {
+    const cur = document.documentElement.getAttribute("data-theme") || "dark";
+    btn.textContent = ICON[cur] || ICON.dark;
+  };
+  sync();
+  btn.addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-theme") || "dark";
+    const next = cur === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("ai-theme", next); } catch (e) {}  // 隐私模式禁 localStorage → 静默, 本 session 仍切
+    sync();
+  });
+}
+
 // === 运行时数据源切换器 (POST /api/source · §8 dashboard): 不重启 server 切数据源 ===
 // 类型判断在 server (_infer_source: 裸 path → scan/live/transcript); 前端只管 POST + 成功回 fleet-view 重拉.
 // 下拉 = 常用 path 收藏 (GET /api/presets, 友好名); 路径框 = 粘贴裸 path; 浏览弹层 = 选目录/文件 (裸 path).
@@ -1508,6 +1528,7 @@ function jumpToAgentsPanel() {
 
 initHeroClicks();
 initLiveTail();
+initTheme();
 initPresets();
 initSourceSwitcher();
 initBrowser();

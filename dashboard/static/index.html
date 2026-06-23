@@ -3,6 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    // 防 FOUC: 首帧前按 localStorage 记忆定 data-theme; 未记过则默认深色 (不跟随系统).
+    // (app.js 在 body 末加载, 若不在此首帧前设好, 会闪一下)
+    (function(){
+      var t = localStorage.getItem('ai-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
   <title>agent-insight · 全局总览</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -12,8 +20,12 @@
   <div class="topbar">
     <h1>agent-insight <span class="sub">全局总览</span></h1>
     <div class="meta-chips" id="meta"></div>
-    <button id="live-toggle" class="live-toggle on" type="button" aria-pressed="true"
-            title="实时刷新开关 · 开着时每 2 秒查一次数据、有变化才更新 · 点进某条详情或切到别的浏览器标签页时暂停">live-tail<span class="dot">●</span></button>
+    <div class="top-actions">
+      <button id="live-toggle" class="live-toggle on" type="button" aria-pressed="true"
+              title="实时刷新开关 · 开着时每 2 秒查一次数据、有变化才更新 · 点进某条详情或切到别的浏览器标签页时暂停">live-tail<span class="dot">●</span></button>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换深色 / 浅色主题"
+              title="切换深色 / 浅色主题 · 首次跟随系统, 手动切过即记住">☀️</button>
+    </div>
   </div>
 
   <div class="src-bar">

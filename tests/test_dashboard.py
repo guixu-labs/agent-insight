@@ -298,6 +298,27 @@ def test_live_tail_frontend_contract():
     check("visibilitychange" in appjs, "D12 app.js 含 visibilitychange (tab 回前台恢复轮询)")
 
 
+def test_theme_toggle_frontend_contract():
+    """D18: 深色/浅色主题切换前端契约 (2026-06-23 · GitHub Light 同源). JS 行为难单测 → 测契约锚点:
+    index.html 含 #theme-toggle 按钮 + <head> inline 防 FOUC 脚本 (ai-theme + prefers-color-scheme);
+    style.css 含 [data-theme=light] 块 + --well 变量 + 浅色覆盖关键变量; app.js 含 initTheme (def+call)
+    + localStorage('ai-theme') + data-theme 属性写."""
+    html = open(os.path.join(HERE, "..", "dashboard", "static", "index.html")).read()
+    css = open(os.path.join(HERE, "..", "dashboard", "static", "style.css")).read()
+    appjs = open(os.path.join(HERE, "..", "dashboard", "static", "app.js")).read()
+    check('id="theme-toggle"' in html, "D18 index.html 含 #theme-toggle 按钮")
+    check("ai-theme" in html, "D18 index.html <head> inline 脚本含 ai-theme (localStorage key)")
+    check("prefers-color-scheme" not in html, "D18 index.html 默认深色 · 不跟随系统 (无 prefers-color-scheme)")
+    check('[data-theme="light"]' in css, "D18 style.css 含 [data-theme=light] 浅色覆盖块")
+    check("--well:" in css, "D18 style.css 含 --well 变量 (面板内凹槽 · 深/浅各一值)")
+    check("--well:#eef1f4" in css, "D18 style.css 浅色 --well 值 (#eef1f4)")
+    check("#0969da" in css, "D18 style.css 浅色 --blue (GitHub Light #0969da)")
+    check(".theme-toggle" in css, "D18 style.css 含 .theme-toggle 按钮样式")
+    check(appjs.count("initTheme") >= 2, "D18 app.js 定义 + 调用 initTheme (def + call)")
+    check("ai-theme" in appjs, "D18 app.js 含 ai-theme (localStorage 记忆手动选择)")
+    check("data-theme" in appjs, "D18 app.js 写 documentElement data-theme 属性")
+
+
 def test_session_drill():
     """D7: scan 源 server → GET /api/session/<sid> 返 callChains (per-spawn) + rootContext (逐 turn 曲线).
     fixture root transcript 同时含 assistant usage 行 (→ rootContext) 和 Agent toolUseResult 行 (→ callChains)."""
@@ -2552,6 +2573,7 @@ if __name__ == "__main__":
     test_live_source()
     test_live_tail_mtime_poll()
     test_live_tail_frontend_contract()
+    test_theme_toggle_frontend_contract()
     test_appjs_id_consistency()
     test_session_drill()
     test_agent_turn_traces()
