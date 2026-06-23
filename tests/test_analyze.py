@@ -379,9 +379,12 @@ check("sess1 spawns==2 (两条 SubagentCall)", r1["spawns"] == 2, r1["spawns"])
 check("sess2 spawns==3 (三条 SubagentCall)", r2["spawns"] == 3, r2["spawns"])
 check("sess1 totalTokens==Σtokens.total (28662+1200=29862)", r1["totalTokens"] == 29862, r1["totalTokens"])
 check("sess2 totalTokens==Σtokens.total (5000+3000+2000=10000)", r2["totalTokens"] == 10000, r2["totalTokens"])
-# cacheReadPct = round(cacheRead/total*100, 1)
-check("sess1 cacheReadPct==round(26880/29862*100,1)=90.0", r1["cacheReadPct"] == 90.0, r1["cacheReadPct"])
-check("sess2 cacheReadPct==round(3500/10000*100,1)=35.0", r2["cacheReadPct"] == 35.0, r2["cacheReadPct"])
+# cacheReadPct = round(cacheRead/(cacheRead+input+cacheCreation)*100, 1)  §8.3/红线6 命中率 (output 不进分母, 与 dashboard app.js sessHit 同口径, 2026-06-23 定调; den=0 → 0.0)
+#   旧公式 cacheRead/total*100 (output 进分母) 是 F-1 bug, 已废弃.
+check("sess1 cacheReadPct==round(26880/(26880+1230+0)*100,1)=95.6 (hit, output 不进分母)",
+      r1["cacheReadPct"] == 95.6, r1["cacheReadPct"])
+check("sess2 cacheReadPct==round(3500/(3500+4500+0)*100,1)=43.8 (hit)",
+      r2["cacheReadPct"] == 43.8, r2["cacheReadPct"])
 check("sess1 modeLabel=='A · live'", r1["modeLabel"] == "A · live", r1["modeLabel"])
 check("sess2 modeLabel=='A · live'", r2["modeLabel"] == "A · live", r2["modeLabel"])
 check("sess1 ctxPeak==0 (live 源无 root context 通道)", r1["ctxPeak"] == 0, r1["ctxPeak"])
@@ -402,7 +405,7 @@ check("降序: sess1(29862) 在前", ps[0]["sid"] == "sess-live-1", ps[0]["sid"]
 check("sessions 裸 sid 列表仍存在 (向后兼容)", set(res.get("sessions", [])) == {"sess-live-1", "sess-live-2"},
       res.get("sessions"))
 
-# _per_session_row 纯函数 (防除零: total=0 时 cacheReadPct=0.0)
+# _per_session_row 纯函数 (防除零: den=cacheRead+input+cacheCreation=0 时 cacheReadPct=0.0)
 row = _per_session_row(
     project="px", sid="sx", spawns=5,
     grand_total_dict={"input": 0, "output": 0, "cacheCreation": 0, "cacheRead": 0, "total": 0},
@@ -417,7 +420,7 @@ row2 = _per_session_row(
     grand_total_dict={"input": 100, "output": 50, "cacheCreation": 0, "cacheRead": 950, "total": 1100},
     dur_ms=65500, consistent=False, mode_label="A · live", ctx_peak=42,
 )
-check("helper 正常: cacheReadPct==round(950/1100*100,1)=86.4", row2["cacheReadPct"] == 86.4, row2["cacheReadPct"])
+check("helper 正常: cacheReadPct==round(950/(950+100+0)*100,1)=90.5 (hit)", row2["cacheReadPct"] == 90.5, row2["cacheReadPct"])
 check("helper 正常: durationS==round(65500/1000,1)=65.5", row2["durationS"] == 65.5, row2["durationS"])
 check("helper 正常: ctx_peak 透传==42", row2["ctxPeak"] == 42, row2["ctxPeak"])
 check("helper 正常: consistent 透传==False", row2["consistent"] is False, row2["consistent"])

@@ -423,7 +423,7 @@ def _per_session_row(*, project, sid, spawns, grand_total_dict, dur_ms,
         "generationId": generation_id,   # Phase 3 (§10.1): = sid 当无 carrier/lineage; fleet gen-tag 显 ⟿ 当 ≠ sid
         "spawns": spawns,
         "totalTokens": total,
-        "cacheReadPct": round(grand_total_dict["cacheRead"] / total * 100, 1) if total else 0.0,
+        "cacheReadPct": round(_cache_hit_rate(grand_total_dict) * 100, 1),   # §8.3/红线6 命中率: cacheRead/(cacheRead+input+cacheCreation), output 不进分母 (与 dashboard app.js sessHit 同口径, 2026-06-23 定调); den=0 → 0.0
         "durationS": round(dur_ms / 1000, 1) if dur_ms else 0.0,
         "consistent": consistent,
         "modeLabel": mode_label,
@@ -812,6 +812,15 @@ def aggregate_scan(per_session, errors, scan_dir, project):
     }
 
 
+def _cache_hit_rate(gt):
+    """§8.3 / 红线 6 cache 命中率 = cacheRead / (cacheRead + input + cacheCreation).
+    output 永不进缓存 → 不进分母 (与 dashboard app.js sessHit/billable 同口径, 2026-06-23 定调).
+    den=0 (空 / 纯 output session) → 0.0."""
+    cr = gt.get("cacheRead") or 0
+    den = cr + (gt.get("input") or 0) + (gt.get("cacheCreation") or 0)
+    return cr / den if den else 0.0
+
+
 def _fmt_pct(num, den):
     return f"{num / den * 100:.1f}" if den else "0.0"
 
@@ -849,7 +858,7 @@ def render_scan(res):
     gt = res["grandTotal"]
     print(f"\ncross-session totals: total={gt['total']} input={gt['input']} output={gt['output']} "
           f"cacheCreation={gt['cacheCreation']} cacheRead={gt['cacheRead']} "
-          f"({_fmt_pct(gt['cacheRead'], gt['total'])}%)  spawns={res['spawnsTotal']}")
+          f"(hit {_fmt_pct(gt['cacheRead'], gt['cacheRead'] + gt['input'] + gt['cacheCreation'])}%)  spawns={res['spawnsTotal']}")
     bt = res["bySubagentType"]
     if bt:
         print("by subagentType:")
