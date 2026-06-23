@@ -30,7 +30,7 @@ Claude Code 跑一个大任务会派出一堆 subagent,但你看不到:
 | **live 源 + live-tail**(mtime-poll 自动 refresh + 前端 2s 轮询) | ✅ 已交付 |
 | **运行时数据源切换器**(不重启 server 切 scan/live/自定义) | ✅ 已交付 |
 | **深色/浅色主题切换**(右上按钮 · 记住选择) | ✅ 已交付(默认深色 · GitHub Light 同源 · localStorage 记忆) |
-| **`/insight` 主动入口**(slash command) | 🔧 待加(见 [commands/](commands/)) |
+| **`/agent-insight:insight` 主动入口**(slash command) | ✅ 已交付 + live 验收通过(2026-06-23) |
 | Level ② session 编排视图 + hero context 半边 | ✅ 已交付(点行 → 单 session → spawn/turn;hero 双面板含 root ctx 峰值) |
 | 跨 session 续接(SessionStart hook + lineage 缝合) | ✅ 已交付(lineage 缝合建满;budgetState defer) |
 
@@ -205,16 +205,16 @@ AGENTINSIGHT_SOURCE=live python3 dashboard/server.py
 - **③ mode chip** —— 见上(刷新×活性三态)。
 - **④ ✗ tool 失败** —— 故意不上 fleet,只在详情页。Bash 非零退出、Edit 未命中等 `is_error` 下沉到出问题的 root/spawn/turn 行。
 
-## `/insight`(规划中)
+## `/agent-insight:insight`(主动查询入口)
 
-主动入口 slash command(待加 [commands/](commands/)):
+装插件后 CC 按 `commands/<name>.md` 约定自动发现为 slash command。**CC 强制加 `<插件名>:` 命名空间前缀**,故实际注册名是 **`/agent-insight:insight`**(不是 `/insight`)。2026-06-23 live 验收确认跑通:命令名 + `${CLAUDE_PLUGIN_ROOT}` 变量替换 + Mode A 读数据。见 [commands/insight.md](commands/insight.md)。
 
-- `/insight` —— 当前 session 编排摘要 in-chat + dashboard localhost URL;
-- `/insight live` —— 切 live 源 tail;
-- `/insight session <id>` —— 钻取单 session;
-- `/insight scan` —— 跑一次 fleet 扫描汇总。
+- `/agent-insight:insight` —— 当前 session 编排摘要 in-chat + dashboard localhost URL;
+- `/agent-insight:insight live` —— 切 live 源 tail;
+- `/agent-insight:insight session <id>` —— 钻取单 session;
+- `/agent-insight:insight scan` —— 跑一次 fleet 扫描汇总。
 
-当前插件是**被动**的(只有 hook,无 command);`/insight` 补上主动查询入口。
+插件默认是**被动**的(只有 hook);`/agent-insight:insight` 补上主动查询入口。
 
 ## 测试
 

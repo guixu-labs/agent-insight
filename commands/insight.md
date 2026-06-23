@@ -4,9 +4,9 @@ argument-hint: "[live | scan | session <id>]"
 disable-model-invocation: true
 ---
 
-# /insight — agent-insight 主动查询入口
+# /agent-insight:insight — agent-insight 主动查询入口
 
-本插件默认**被动**(只有 hook)。`/insight` 补上主动查询:跑 reader `tools/analyze.py` 把结果摘要进 chat,并给 dashboard URL。**只读、零耦合**——不注册 hook、不改编排。
+本插件默认**被动**(只有 hook)。`/agent-insight:insight` 补上主动查询:跑 reader `tools/analyze.py` 把结果摘要进 chat,并给 dashboard URL。**只读、零耦合**——不注册 hook、不改编排。
 
 按用户参数 `$ARGUMENTS` 分流(无参数 = 默认)。
 
