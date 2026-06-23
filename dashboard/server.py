@@ -80,10 +80,9 @@ _KNOWN_PREF = ("file:", "jsonl:", "transcript:", "scan:", "live:")
 
 
 def _resolve_live_logdir():
-    """live logdir 基址 (call-time 读 env, 便于测试覆盖). 镜像 record.py:76-81 优先级:
-    AGENTINSIGHT_LOG_DIR > CLAUDE_PLUGIN_DATA > ~/.claude/agent-insight."""
+    """live logdir 基址 (call-time 读 env, 便于测试覆盖). 镜像 record.py 优先级:
+    AGENTINSIGHT_LOG_DIR > ~/.claude/agent-insight (不认 CLAUDE_PLUGIN_DATA, 2026-06-23 修断链)."""
     base = (os.environ.get("AGENTINSIGHT_LOG_DIR", "").strip()
-            or os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
             or os.path.expanduser("~/.claude/agent-insight"))
     return os.path.realpath(base)
 

@@ -65,11 +65,11 @@ def _project_name(cwd):
 
 
 def _log_base():
-    """log 根目录 (无 project 子目录): AGENTINSIGHT_LOG_DIR > CLAUDE_PLUGIN_DATA > ~/.claude/agent-insight.
+    """log 根目录 (无 project 子目录): AGENTINSIGHT_LOG_DIR > ~/.claude/agent-insight.
     全局/跨 project 文件 (generations.jsonl lineage 映射, §10.1) 用此 — 与 _log_dir 同优先级, 仅去 project join.
-    (carrier 是 cwd 无关的 env, lineage 映射跨 project, 故放 base 根非 project 子目录.)"""
+    (carrier 是 cwd 无关的 env, lineage 映射跨 project, 故放 base 根非 project 子目录.)
+    不认 CLAUDE_PLUGIN_DATA — 数据位置不绑死插件安装方式 (2026-06-23 修断链: 写读统一 ~/.claude/agent-insight)."""
     return (os.environ.get("AGENTINSIGHT_LOG_DIR", "").strip()
-            or os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
             or os.path.expanduser("~/.claude/agent-insight"))
 
 

@@ -637,11 +637,10 @@ def load_generations_map(log_base=None):
     """读 <log_base>/generations.jsonl → ({sessionId: generationId}, [raw_rows]). inert-safe.
 
     缺文件/坏目录 → ({}, []); 坏行逐行 try/except 跳 (镜像 _load_jsonl_file 的 per-line 容错); 非 dict 跳.
-    log_base 默认走 record.py _log_base 同优先级 (AGENTINSIGHT_LOG_DIR > CLAUDE_PLUGIN_DATA > ~/.claude/agent-insight).
+    log_base 默认走 record.py _log_base 同优先级 (AGENTINSIGHT_LOG_DIR > ~/.claude/agent-insight; 不认 CLAUDE_PLUGIN_DATA, 2026-06-23 修断链).
     last-writer-wins: 同 sessionId 多行后写覆盖前 (Breather 行更知真实 handoff 图, 应盖 plugin-hook 行).
     reader 只取 sessionId/generationId; timestamp(plugin-hook)/ts(Breather)/prevSessionId 读到不参与."""
     base = log_base or (os.environ.get("AGENTINSIGHT_LOG_DIR", "").strip()
-                        or os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
                         or os.path.expanduser("~/.claude/agent-insight"))
     path = os.path.join(base, "generations.jsonl")
     mapping, raw = {}, []
