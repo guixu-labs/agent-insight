@@ -52,6 +52,16 @@ const anomalyLvl = (r) =>
   isBlown(r) ? 3 : isLowHit(r) ? 2 : ((r.asyncCount || 0) > 0 ? 1 : 0);
 const barClass = (frac) =>
   frac == null ? "" : (frac >= 0.85 ? "hit-h" : frac >= 0.60 ? "hit-m" : "hit-l");
+// 缺口 1 预算 chip (reader-computes; result.generations[i].budgetState 配了 threshold 才存在, 未配 → "" 不显, 表格逐字同今天).
+// budgetState = {threshold, cumulativeTotal, pctOfThreshold, exceeded}. tier 与 cache 色阶相反 (预算: 越近/超阈越红; cache: 越高越绿), 故独立 tier:
+// <80% ok(绿) / 80–99% warn(琥珀) / ≥100% 或 exceeded over(红). per-session 行查其 generation 的 budgetState (singleton/multiSession 成员同源).
+function budgetChip(bs) {
+  if (!bs) return "";
+  const p = Number(bs.pctOfThreshold) || 0;
+  const tier = (bs.exceeded || p >= 100) ? "over" : p >= 80 ? "warn" : "ok";
+  const tip = `预算 ${fmt(bs.cumulativeTotal)} / ${fmt(bs.threshold)} token (${p.toFixed(1)}%${bs.exceeded ? " · 已超阈" : ""})`;
+  return `<span class="budget-meter budget-${tier}" title="${esc(tip)}">·${Math.round(p)}%</span>`;
+}
 
 // ctx peak 单元格: 三态 — 💥 爆掉(ctxLimitErrors.count>0, 压缩失败/逼爆, §8.3) > ⚠ 大上下文(peak>CTX_LARGE) > 正常.
 // 💥 优先级最高: 9aa81da2 peak 201k 且爆掉 → 显 💥 (非 ⚠), 呼应 §8.3:496「peak 才 ~20% 却爆, 非逼近 limit」.
@@ -353,7 +363,7 @@ function render(result) {
       `<td class="sess">${projName(r.project)} <span class="sid">${esc((r.sid || "?").slice(0, 8))}</span>${tag}${genTag}</td>` +
       `<td class="num">${r.spawns != null ? r.spawns : 0}</td>` +
       `<td class="num">${fmtDur(r.durationS)}</td>` +
-      `<td class="num">${fmt(bt)}</td>` +
+      `<td class="num">${fmt(bt)}${budgetChip((_gensById[r.generationId] || {}).budgetState)}</td>` +
       `<td class="num">${cacheCell}</td>` +
       `<td class="num">${fmt(fullInput)}</td>` +
       `<td class="num">${ctxCell(r.ctxPeak, r.ctxLimitErrors)}</td>` +
@@ -378,7 +388,7 @@ function render(result) {
         const gh = document.createElement("tr");
         gh.className = "gen-head";
         gh.innerHTML = `<td colspan="8"><span class="gen-tag">⟿ ${esc(gid.slice(0, 8))}</span> ` +
-          `<span class="faint">跨 session 续接 · ${g.sessionsN} session · 卷起 ${fmt((g.grandTotal || {}).total || 0)} token</span></td>`;
+          `<span class="faint">跨 session 续接 · ${g.sessionsN} session · 卷起 ${fmt((g.grandTotal || {}).total || 0)} token</span>${budgetChip(g.budgetState)}</td>`;
         tbody.appendChild(gh);
       }
       for (const r of rows) tbody.appendChild(fleetRow(r));

@@ -2566,6 +2566,50 @@ def test_generation_tag_frontend():
     check("tr.gen-head" in css, "DG3 style.css 含 tr.gen-head 规则 (分组头行)")
 
 
+def test_budget_chip_frontend():
+    """缺口 1 budgetState (reader-computes) dashboard 契约: server 透传 generations[].budgetState + 前端 chip 源码.
+    镜像 D1 (file 源 server 透传) + DG (静态源契约). 前端无 headless browser → 渲染逻辑只验源码
+    (budgetChip def + fleetRow/gen-head 双接线 + tier→class 映射 + inert 守卫)."""
+    # DB1 数据路径: server (file 源) 透传 generations[].budgetState 到 /api/result (red line 10 passthrough, app.js 才读得到).
+    fx = _fixture()
+    fx["generations"] = [{
+        "generationId": "g-shared", "sessionIds": ["s1", "s2"], "sessionsN": 2, "spawnsTotal": 8,
+        "grandTotal": {"input": 0, "output": 0, "cacheCreation": 0, "cacheRead": 0, "total": 400},
+        "durationS": 30.0, "multiSession": True,
+        "budgetState": {"threshold": 500, "cumulativeTotal": 400, "pctOfThreshold": 80.0, "exceeded": False},
+    }]
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(fx, f); fxpath = f.name
+    port = _free_port()
+    proc = _start(port, f"file:{fxpath}")
+    try:
+        check(_wait_ready(port), "DB1 server ready (budget fixture)")
+        status, body = _get(port, "/api/result")
+        check(status == 200, "DB1 /api/result 200 (budget fixture)")
+        gens = (json.loads(body) or {}).get("generations") or []
+        check(len(gens) == 1 and "budgetState" in gens[0], "DB1 server 透传 generations[0].budgetState")
+        bs = gens[0]["budgetState"]
+        check(bs.get("threshold") == 500 and bs.get("cumulativeTotal") == 400, "DB1 budgetState 阈值/累计透传")
+        check(bs.get("pctOfThreshold") == 80.0 and bs.get("exceeded") is False, "DB1 budgetState pct/exceeded 透传")
+    finally:
+        proc.terminate(); proc.wait(); os.unlink(fxpath)
+    # DB2 app.js 源: budgetChip def + fleetRow/gen-head 双接线 + tier→class 映射 + inert 守卫.
+    # (tier class 字面 budget-ok/warn/over 只在 style.css 里; app.js 是 budget-${tier} 模板插值, 故此处验模板 + 阈值分支.)
+    appjs = open(os.path.join(HERE, "..", "dashboard", "static", "app.js")).read()
+    check("function budgetChip" in appjs, "DB2 app.js 含 budgetChip 定义")
+    check(appjs.count("budgetChip") >= 3, "DB2 app.js budgetChip 接线 ≥3 (def + fleetRow + gen-head)")
+    check("budget-meter" in appjs and "budget-${tier}" in appjs, "DB2 app.js 发射 .budget-meter + budget-${tier} tier→class")
+    check('p >= 100' in appjs and "p >= 80" in appjs, "DB2 app.js tier 阈值分支 (≥100 over / ≥80 warn)")
+    check("if (!bs)" in appjs, "DB2 app.js budgetChip inert 守卫 (无 budgetState → '' 不显, 表格逐字同今天)")
+    # DB3 style.css 源: chip 骨架 + 三 tier 字面规则 (镜像 .async-tag, 复用 --green/--amber/--red 变量).
+    css = open(os.path.join(HERE, "..", "dashboard", "static", "style.css")).read()
+    check(".budget-meter" in css, "DB3 style.css 含 .budget-meter 骨架")
+    for tier in ("budget-ok", "budget-warn", "budget-over"):
+        check(f".budget-meter.{tier}" in css, f"DB3 style.css 含 .budget-meter.{tier} tier 规则")
+    check("var(--green)" in css and "var(--amber)" in css and "var(--red)" in css,
+          "DB3 style.css 复用 --green/--amber/--red 变量 (零额外主题活, 深浅主题同名覆盖)")
+
+
 if __name__ == "__main__":
     test_api_result_file_source()
     test_static_routes_and_scaffolding()
@@ -2627,4 +2671,5 @@ if __name__ == "__main__":
     test_root_detail_route()
     test_root_detail_frontend()
     test_generation_tag_frontend()
+    test_budget_chip_frontend()
     print(f"\n{PASSED} PASS / 0 FAIL")

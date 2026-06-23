@@ -312,6 +312,14 @@ footer code { font-family:var(--mono); color:var(--muted); }
 .async-tag { display:inline-block; font-size:9px; font-weight:600; padding:1px 5px; border-radius:4px;
   background:rgba(240,136,62,.14); border:1px solid rgba(240,136,62,.4); color:var(--amber); }
 
+/* 缺口 1 预算 chip (fleetRow total cell + gen-head; reader-computes budgetState 配了 threshold 才显, 未配则无此节点, 表格逐字同今天).
+   tier 与 cache 色阶相反 (预算: 越近/超阈越红): <80% ok(绿) / 80–99% warn(琥珀) / ≥100% 或超阈 over(红). 镜像 .async-tag 骨架. */
+.budget-meter { display:inline-block; font-size:9px; font-weight:600; padding:1px 5px; border-radius:4px;
+  margin-left:5px; font-family:var(--mono); white-space:nowrap; vertical-align:middle; }
+.budget-meter.budget-ok { background:rgba(63,185,80,.14); border:1px solid rgba(63,185,80,.4); color:var(--green); }
+.budget-meter.budget-warn { background:rgba(240,136,62,.14); border:1px solid rgba(240,136,62,.4); color:var(--amber); }
+.budget-meter.budget-over { background:rgba(248,81,73,.16); border:1px solid rgba(248,81,73,.45); color:var(--red); }
+
 /* gantt 异步启动竖线 (无宽度 marker: run_in_background 启动时刻, 运行时长未知; 用户: "划道鲜明的线") */
 .gantt-async { position:absolute; top:0; bottom:0; width:0; border-left:2px dashed var(--amber);
                transform:translateX(-1px); cursor:pointer; z-index:3; }

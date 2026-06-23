@@ -545,6 +545,83 @@ check("inert: 2 generation", len(gens_inert) == 2, len(gens_inert))
 # 16d 空 per_session_rows → []
 check("空 per_session_rows → []", _az.aggregate_generations([]) == [], "non-empty")
 
+# ===== 组17 · 缺口1 budgetState (reader-computes, threshold env opt-in; inert 不加 key) =====
+print("\n[组17] budgetState — reader-computes 预算; threshold env opt-in (未配 → 无 key, 逐字今天行为)")
+# 17a _budget_threshold: env 解析 (空/非数字/0 → None)
+_env_save = os.environ.pop("AGENTINSIGHT_BUDGET_THRESHOLD", None)
+try:
+    os.environ["AGENTINSIGHT_BUDGET_THRESHOLD"] = "60000"
+    check("_budget_threshold 有效 int=60000", _az._budget_threshold() == 60000, _az._budget_threshold())
+    os.environ["AGENTINSIGHT_BUDGET_THRESHOLD"] = "  12345  "
+    check("_budget_threshold strip 空白=12345", _az._budget_threshold() == 12345, _az._budget_threshold())
+    os.environ["AGENTINSIGHT_BUDGET_THRESHOLD"] = "not-a-number"
+    check("_budget_threshold 非数字 → None", _az._budget_threshold() is None, _az._budget_threshold())
+    os.environ["AGENTINSIGHT_BUDGET_THRESHOLD"] = "0"
+    check("_budget_threshold '0' → None (零阈值无意义)", _az._budget_threshold() is None, _az._budget_threshold())
+    os.environ["AGENTINSIGHT_BUDGET_THRESHOLD"] = ""
+    check("_budget_threshold 空串 → None", _az._budget_threshold() is None, _az._budget_threshold())
+    del os.environ["AGENTINSIGHT_BUDGET_THRESHOLD"]
+    check("_budget_threshold 缺失 → None", _az._budget_threshold() is None, _az._budget_threshold())
+finally:
+    if _env_save is None:
+        os.environ.pop("AGENTINSIGHT_BUDGET_THRESHOLD", None)
+    else:
+        os.environ["AGENTINSIGHT_BUDGET_THRESHOLD"] = _env_save
+check("_budget_threshold 未污染 env (已还原)", "AGENTINSIGHT_BUDGET_THRESHOLD" not in os.environ, os.environ.get("AGENTINSIGHT_BUDGET_THRESHOLD"))
+
+# 17b _budget_state: 纯函数数学 (pct 取整 / exceeded 到阈即超 / None inert)
+check("_budget_state threshold=None → None", _az._budget_state(500, None) is None, "non-None")
+check("_budget_state threshold=0 → None (inert)", _az._budget_state(500, 0) is None, "non-None")
+bs = _az._budget_state(400, 500)
+check("_budget_state 400/500 exceeded=False", bs["exceeded"] is False, bs)
+check("_budget_state pct 取整 80.0", bs["pctOfThreshold"] == 80.0, bs)
+check("_budget_state cumulativeTotal=400", bs["cumulativeTotal"] == 400, bs)
+check("_budget_state threshold=500", bs["threshold"] == 500, bs)
+bs_edge = _az._budget_state(500, 500)
+check("_budget_state 到阈即超 (cumulative==threshold → exceeded True)", bs_edge["exceeded"] is True, bs_edge)
+check("_budget_state pct 100.0", bs_edge["pctOfThreshold"] == 100.0, bs_edge)
+bs_over = _az._budget_state(750, 500)
+check("_budget_state 超阈 750/500 exceeded=True", bs_over["exceeded"] is True, bs_over)
+check("_budget_state pct 150.0", bs_over["pctOfThreshold"] == 150.0, bs_over)
+bs_odd = _az._budget_state(1, 3)
+check("_budget_state pct 非整除 1/3=33.3 (round 1 位)", bs_odd["pctOfThreshold"] == 33.3, bs_odd)
+
+# 17c aggregate_generations(threshold=T): 跨 session 卷起 cumulativeTotal = 两 session total 之和
+rows_b = [_psrow("s1", "g-shared", 3, 150, 10.0), _psrow("s2", "g-shared", 5, 250, 20.0),
+          _psrow("s-solo", "s-solo", 2, 100, 5.0)]
+gens_b = _az.aggregate_generations(rows_b, threshold=500)
+by_gid_b = {g["generationId"]: g for g in gens_b}
+shared_b = by_gid_b["g-shared"]
+check("multiSession budgetState key 存在", "budgetState" in shared_b, list(shared_b.keys()))
+check("multiSession cumulativeTotal=400 (150+250 跨 session 之和)",
+      shared_b["budgetState"]["cumulativeTotal"] == 400, shared_b["budgetState"])
+check("multiSession pct=80.0", shared_b["budgetState"]["pctOfThreshold"] == 80.0, shared_b["budgetState"])
+check("multiSession exceeded=False (400<500)", shared_b["budgetState"]["exceeded"] is False, shared_b["budgetState"])
+check("multiSession threshold=500", shared_b["budgetState"]["threshold"] == 500, shared_b["budgetState"])
+solo_b = by_gid_b["s-solo"]
+check("singleton 也有 budgetState key", "budgetState" in solo_b, list(solo_b.keys()))
+check("singleton cumulativeTotal=100", solo_b["budgetState"]["cumulativeTotal"] == 100, solo_b["budgetState"])
+check("singleton pct=20.0", solo_b["budgetState"]["pctOfThreshold"] == 20.0, solo_b["budgetState"])
+
+# 17d inert: threshold=None (显式 + 默认参) → 无 budgetState key, result 逐字今天
+check("inert threshold=None: 无 budgetState key",
+      all("budgetState" not in g for g in _az.aggregate_generations(rows_b, threshold=None)),
+      [list(g.keys()) for g in _az.aggregate_generations(rows_b, threshold=None)])
+check("inert 默认参 (不传 threshold): 无 budgetState key",
+      all("budgetState" not in g for g in _az.aggregate_generations(rows_b)),
+      [list(g.keys()) for g in _az.aggregate_generations(rows_b)])
+check("inert: 其余字段与 threshold=None 逐字相同 (budget 是加性, 不改既有)",
+      _az.aggregate_generations(rows_b, threshold=500) and True  # 上方已校验既有字段组16 覆盖
+      and [{k: v for k, v in g.items() if k != "budgetState"} for g in _az.aggregate_generations(rows_b, threshold=500)]
+      == _az.aggregate_generations(rows_b, threshold=None), "diff")
+
+# 17e tier 数学边界: over (>=) / 单 session 超阈
+gens_over = _az.aggregate_generations([_psrow("s1", "g1", 1, 600, 1.0)], threshold=500)
+check("tier over (600>=500) exceeded=True", gens_over[0]["budgetState"]["exceeded"] is True, gens_over[0]["budgetState"])
+check("tier over pct=120.0", gens_over[0]["budgetState"]["pctOfThreshold"] == 120.0, gens_over[0]["budgetState"])
+gens_eq = _az.aggregate_generations([_psrow("s1", "g1", 1, 500, 1.0)], threshold=500)
+check("tier 到阈 (500==500) exceeded=True (>=)", gens_eq[0]["budgetState"]["exceeded"] is True, gens_eq[0]["budgetState"])
+
 # ===== 收尾 =====
 print("\n" + "=" * 70)
 print(f"结果: {passed} PASS / {failed} FAIL")

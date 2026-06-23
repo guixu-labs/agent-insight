@@ -688,12 +688,44 @@ def _apply_generation_map(records, mapping):
                     r["carrierSource"] = "lineage-map"
 
 
-def aggregate_generations(per_session_rows):
+def _budget_threshold():
+    """读 AGENTINSIGHT_BUDGET_THRESHOLD env (token int, opt-in). 空/非数字/0 → None (inert, 不算预算).
+
+    镜像既有 AGENTINSIGHT_* 读取模式 (load_generations_map / _reconcile_live_records 的 os.environ.get(...).strip()).
+    0 → None (零阈值无意义; 下游 _budget_state 亦以 truthiness 复核, 双保险)."""
+    raw = os.environ.get("AGENTINSIGHT_BUDGET_THRESHOLD", "").strip()
+    if not raw:
+        return None
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return val or None
+
+
+def _budget_state(cumulative, threshold):
+    """预算判定 (单一源头, reader-computes; 未来 Breather seam 复用此函数, 缺口 1).
+
+    cumulative = generation 跨 session 卷起的 grandTotal.total (cacheRead-inclusive, 红线 6).
+    threshold=None → None (inert: 不加 budgetState key, 逐字今天行为). pct 取整镜像 cacheReadPct 口径.
+    exceeded = 到阈即超 (cumulative >= threshold)."""
+    if not threshold:
+        return None
+    return {
+        "threshold": threshold,
+        "cumulativeTotal": cumulative,
+        "pctOfThreshold": round(cumulative / threshold * 100, 1),
+        "exceeded": cumulative >= threshold,
+    }
+
+
+def aggregate_generations(per_session_rows, threshold=None):
     """按 generationId 卷 per_session_rows → generation 聚合列表 (跨 session 续接可见产物, §10.1).
 
-    每条: {generationId, sessionIds[], sessionsN, spawnsTotal, grandTotal, durationS, multiSession}.
+    每条: {generationId, sessionIds[], sessionsN, spawnsTotal, grandTotal, durationS, multiSession, budgetState?}.
     generationId==sid (无 carrier/无 lineage) 的 session → 单成员 generation (multiSession=False) → 渲染同今天.
     grandTotal 复用 _merge_grand_total (cacheRead-inclusive 计费口径, 与 grandTotal 同核; pre-existing token 债不动).
+    budgetState: threshold 配了才加 key — cumulative = 该 generation 跨 session 卷起的 grandTotal.total (缺口 1, reader-computes).
     按 grandTotal.total 降序."""
     by_gen = defaultdict(list)
     for row in per_session_rows:
@@ -702,7 +734,7 @@ def aggregate_generations(per_session_rows):
     out = []
     for gid, rows in by_gen.items():
         gt = _merge_grand_total([r["grandTotal"] for r in rows])
-        out.append({
+        gen = {
             "generationId": gid,
             "sessionIds": sorted(r["sid"] for r in rows),
             "sessionsN": len(rows),
@@ -710,7 +742,11 @@ def aggregate_generations(per_session_rows):
             "grandTotal": gt,
             "durationS": round(sum(r["durationS"] for r in rows), 1),
             "multiSession": len(rows) > 1,
-        })
+        }
+        bs = _budget_state(gt["total"], threshold)
+        if bs is not None:
+            gen["budgetState"] = bs        # 缺口 1: 仅配置 threshold 时才加 key (inert — 未配则字段不存在, 渲染同今天)
+        out.append(gen)
     out.sort(key=lambda g: g["grandTotal"]["total"], reverse=True)
     return out
 
@@ -804,7 +840,7 @@ def aggregate_scan(per_session, errors, scan_dir, project):
         "callGraph": cg,
         "spawnsTotal": total_spawns,
         "perSession": per_session_rows,
-        "generations": aggregate_generations(per_session_rows),   # Phase 3 (§10.1): 同 generationId 跨 session 卷起 (multiSession=True 显续接); 全 singleton=今天行为
+        "generations": aggregate_generations(per_session_rows, _budget_threshold()),   # Phase 3 (§10.1): 同 generationId 跨 session 卷起 (multiSession=True 显续接); 全 singleton=今天行为. budgetState (缺口 1): threshold 配了才挂
         "topSessions": top_sessions,
         "scanConsistency": {"allConsistent": len(violating) == 0, "violatingSessions": violating},
         "depth2Note": _DEPTH2_NOTE,
@@ -973,7 +1009,7 @@ def _mode_a_result(args):
         )
         for sid, evs in _by_sid.items()
     ]
-    result["generations"] = aggregate_generations(result["perSession"])   # Phase 3 (§10.1): live logdir 跨 session 同 carrier 时多 session 卷起; 单 session→singleton
+    result["generations"] = aggregate_generations(result["perSession"], _budget_threshold())   # Phase 3 (§10.1): live logdir 跨 session 同 carrier 时多 session 卷起; 单 session→singleton. budgetState (缺口 1): threshold 配了才挂
     return result, topo
 
 
