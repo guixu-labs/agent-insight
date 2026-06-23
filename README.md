@@ -219,16 +219,14 @@ AGENTINSIGHT_SOURCE=live python3 dashboard/server.py
 ## 测试
 
 ```
-python3 tests/test_record.py              # recorder 落盘逻辑 (40/40)
-python3 tests/test_analyze.py             # Mode A reader 拓扑 + 自洽 + live-tail --watch (114/114)
-python3 tests/test_transcript_adapter.py  # Mode B transcript ingest (82/82*)
-python3 tests/test_scan_projects.py       # Mode B fleet 扫描 + 跨 session 合并 (77/82*)
-python3 tests/test_dashboard.py           # dashboard server 契约 + scaffolding + live 源/切换器/浏览弹层 (614/614)
+python3 tests/test_record.py              # recorder 落盘逻辑 (73/73)
+python3 tests/test_analyze.py             # Mode A reader 拓扑 + 自洽 + live-tail --watch (144/144)
+python3 tests/test_transcript_adapter.py  # Mode B transcript ingest (83/83)
+python3 tests/test_scan_projects.py       # Mode B fleet 扫描 + 跨 session 合并 (102/102)
+python3 tests/test_dashboard.py           # dashboard server 契约 + scaffolding + live 源/切换器/浏览弹层 (636/636)
 ```
 
-五套都隔离(子进程 + 临时目录 / env),**不碰真 session / settings.json**。
-
-> *\* 已知基线:`test_scan_projects` 5 个 + `test_transcript_adapter` 1 个 = **6 个预存 FAIL**,全是 `grandTotal.total` 的 token 口径断言(test 期望 total 不含 cacheRead,实现按计费口径含 cacheRead)。这是本仓建立前就存在的已知债务、**非回归**,不阻塞功能。待统一口径后清零。*
+五套都隔离(子进程 + 临时目录 / env),**不碰真 session / settings.json**。**全绿**(2026-06-23 清掉历史 token 口径债:`grandTotal.total` 统一为四桶求和含 cacheRead,fixture 对齐)。
 
 ## 形态与边界
 

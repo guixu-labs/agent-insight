@@ -43,11 +43,18 @@ def check(name, cond, detail=""):
 
 # ---------- 合成 transcript 行构造器 ----------
 def agent_result_line(agent_id, agent_type="Explore", status="completed",
-                      total_tokens=10000, inp=1000, out=500, ccr=0, cr=8500,
+                      total_tokens=10000, inp=None, out=None, ccr=None, cr=None,
                       dur_ms=5000, resolved_model=None, message_model=None,
                       ts="2026-06-16T13:00:00+08:00", is_sidechain=False,
                       session_id="s-test"):
-    """一条带 Agent toolUseResult (dict + agentId) 的 transcript 行. total_tokens=None → 省略 totalTokens."""
+    """一条带 Agent toolUseResult (dict + agentId) 的 transcript 行. total_tokens=None → 省略 totalTokens.
+
+    token 口径: total = usage 四桶求和 (含 cacheRead; adapter 不读 tur.totalTokens).
+    默认 total_tokens 全进 input、余桶 0 → 求和值 = total_tokens; 显式传桶则覆盖 (组1/2/11/16)."""
+    if inp is None: inp = total_tokens
+    if out is None: out = 0
+    if ccr is None: ccr = 0
+    if cr is None: cr = 0
     tur = {
         "status": status, "agentId": agent_id, "agentType": agent_type,
         "totalDurationMs": dur_ms, "usage": {
@@ -248,7 +255,7 @@ check("input=11843 (usage.input_tokens)", gt.get("input") == 11843, gt)
 check("output=2 (usage.output_tokens)", gt.get("output") == 2, gt)
 check("cacheCreation=0", gt.get("cacheCreation") == 0, gt)
 check("cacheRead=960", gt.get("cacheRead") == 960, gt)
-check("total=12805 (toolUseResult.totalTokens, 非求和)", gt.get("total") == 12805, gt)
+check("total=12805 (四桶求和 11843+2+0+960; adapter 不读 tur.totalTokens)", gt.get("total") == 12805, gt)
 check("durationMs=5000 透传", find_chain(res, "Explore") and find_chain(res, "Explore").get("durationMs") == 5000, "dur")
 
 # ===== 组3 resolvedModel 在 toolUseResult (直接命中) =====

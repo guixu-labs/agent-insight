@@ -51,9 +51,17 @@ def check(name, cond, detail=""):
 
 # ---------- 合成 transcript 行构造器 (简化自 test_transcript_adapter) ----------
 def agent_line(agent_id, agent_type="Explore", status="completed",
-               total_tokens=10000, inp=1000, out=500, ccr=0, cr=8500,
+               total_tokens=10000, inp=None, out=None, ccr=None, cr=None,
                dur_ms=5000, resolved_model=None, ts="2026-06-16T13:00:00+08:00"):
-    """一条带 Agent toolUseResult (dict + agentId) 的 transcript 行 (root-direct spawn)."""
+    """一条带 Agent toolUseResult (dict + agentId) 的 transcript 行 (root-direct spawn).
+
+    token 口径: total = usage 四桶求和 (含 cacheRead; adapter 不读 tur.totalTokens).
+    默认 total_tokens 全进 input、余桶 0 → 求和值 = total_tokens (与显式桶范式一致);
+    显式传 inp/out/ccr/cr 则覆盖 (要特定桶分布时用). tur.totalTokens 字段 vestigial (实现不读)."""
+    if inp is None: inp = total_tokens
+    if out is None: out = 0
+    if ccr is None: ccr = 0
+    if cr is None: cr = 0
     tur = {"status": status, "agentId": agent_id, "agentType": agent_type,
            "totalDurationMs": dur_ms, "usage": {
                "input_tokens": inp, "output_tokens": out,
