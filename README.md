@@ -1,5 +1,7 @@
 # agent-insight
 
+**中文** | [English](README.en.md)
+
 **通用 agent / subagent 编排可观测性工具。** 被动 `PostToolUse` hook 记录每个 subagent 的 **token / 时延 / 成败 / Skill 使用 / 命令结果**,落滚动 JSONL;自带 reader(读 live JSONL 或 CC 原生 transcript,统一 Event IR)与浏览器 dashboard。**opt-in、零耦合、只量不动。**
 
 给 Claude Code 的多 agent 编排一个诚实的账本:谁派了谁、花了多少 token、哪些 skill 被加载、哪条命令失败。**深而精**——完整嵌套深度(depth-3+)的 per-subagent token 归因 + spawn 调用拓扑 + 单一计费核(cache 命中率按计费口径,skill 零 token 不稀释)。
