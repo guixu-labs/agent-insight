@@ -18,9 +18,9 @@ SERVER = os.path.join(HERE, "..", "dashboard", "server.py")
 PLUGIN = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 try:
-    from transcript_adapter import agent_turn_traces, agent_spawn_head, agent_turn_raw
+    from transcript_adapter import agent_turn_traces, agent_spawn_head, agent_turn_raw, search_turns
 except Exception:
-    agent_turn_traces = agent_spawn_head = agent_turn_raw = None
+    agent_turn_traces = agent_spawn_head = agent_turn_raw = search_turns = None
 PASSED = 0
 
 
@@ -2610,6 +2610,176 @@ def test_budget_chip_frontend():
           "DB3 style.css 复用 --green/--amber/--red 变量 (零额外主题活, 深浅主题同名覆盖)")
 
 
+def test_search_turns_unit():
+    """DS: search_turns (单文件 → query 命中清单). 复用分离结构 fixture 验 text/tool_use/tool_result 三 field
+    命中 + 空间分离 tool_result 经全文索引命中 + miss/空/<2 字符/坏路径 → []. turnIndex 与 /api/turn/<i> 同空间."""
+    assert search_turns is not None
+    tmp = tempfile.mkdtemp()
+    p = os.path.join(tmp, "agent-srch-unit.jsonl")
+    lines = [
+        # turn0: tool_use tu-A (Bash ls) — 其 tool_result 在文末 (空间分离, 局部 capture 必漏)
+        json.dumps({"type": "assistant", "timestamp": "2026-06-18T10:00:00+08:00",
+                    "message": {"role": "assistant", "stop_reason": "tool_use",
+                                "content": [{"type": "tool_use", "id": "tu-A", "name": "Bash",
+                                             "input": {"command": "ls -la /tmp"}}]}}),
+        # turn1: tool_use tu-B (Read alpha.py)
+        json.dumps({"type": "assistant", "timestamp": "2026-06-18T10:00:01+08:00",
+                    "message": {"role": "assistant", "stop_reason": "tool_use",
+                                "content": [{"type": "tool_use", "id": "tu-B", "name": "Read",
+                                             "input": {"file_path": "alpha.py"}}]}}),
+        # turn2: text 含目标词
+        json.dumps({"type": "assistant", "timestamp": "2026-06-18T10:00:02+08:00",
+                    "message": {"role": "assistant", "stop_reason": "end_turn",
+                                "content": [{"type": "text", "text": "搜索目标词 出现在这里 done"}]}}),
+        # tool_results 堆末尾 (空间分离)
+        json.dumps({"type": "user", "timestamp": "2026-06-18T10:00:03+08:00",
+                    "message": {"role": "user", "content": [{"type": "tool_result",
+                                "tool_use_id": "tu-A", "content": "out: file1.txt file2.txt"}]}}),
+        json.dumps({"type": "user", "timestamp": "2026-06-18T10:00:04+08:00",
+                    "message": {"role": "user", "content": [{"type": "tool_result",
+                                "tool_use_id": "tu-B", "content": "print('hello world')"}]}}),
+    ]
+    with open(p, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    # tool_result 命中 (空间分离, 全文索引): turn0 result 含 file1.txt (非 turn0 的 tool_use input)
+    hs = search_turns(p, "file1.txt")
+    check(len(hs) == 1, "DS tool_result 命中 1 条")
+    check(hs[0]["turnIndex"] == 0 and hs[0]["field"] == "tool_result", "DS tool_result turn0 field")
+    check(hs[0]["toolName"] == "Bash", "DS tool_result toolName=Bash (反查 tu-A)")
+    check("file1.txt" in hs[0]["snippet"], "DS snippet 含 query")
+    # tool_use 命中: turn1 input alpha.py
+    hs = search_turns(p, "alpha.py")
+    check(len(hs) == 1 and hs[0]["turnIndex"] == 1 and hs[0]["field"] == "tool_use", "DS tool_use 命中 turn1")
+    check(hs[0]["toolName"] == "Read", "DS tool_use toolName=Read")
+    # text 命中: turn2
+    hs = search_turns(p, "搜索目标词")
+    check(len(hs) == 1 and hs[0]["turnIndex"] == 2 and hs[0]["field"] == "text", "DS text 命中 turn2")
+    # miss / 空 / <2 字符 / 坏路径
+    check(search_turns(p, "zzz") == [], "DS 无命中 → []")
+    check(search_turns(p, "") == [], "DS 空 query → []")
+    check(search_turns(p, "x") == [], "DS 1 字符 → []")
+    check(search_turns("/nope.jsonl", "file") == [], "DS 坏路径 → []")
+
+
+def test_search_endpoint():
+    """DS2: scan 源 → GET /api/search?q=X 跨 session turn 搜索. root 命中 agentId=null/agentType=root;
+    subagent 命中 agentId=短/agentType=subagent. 400 空/<2; 200 无命中 hits=[]; truncated 在."""
+    from urllib.parse import quote
+    tmp = tempfile.mkdtemp()
+    proj = os.path.join(tmp, "-home-fakeproj")
+    sid = "dddd1111-2222-3333-4444-555566667777"
+    sdir = os.path.join(proj, sid, "subagents")
+    os.makedirs(sdir, exist_ok=True)
+    # root transcript: turn0 text 含目标词
+    with open(os.path.join(proj, sid + ".jsonl"), "w") as f:
+        f.write(json.dumps({"type": "assistant", "timestamp": "2026-06-18T10:00:00+08:00",
+                            "sessionId": sid, "message": {"role": "assistant", "stop_reason": "end_turn",
+                            "content": [{"type": "text", "text": "这里含 fleet目标token 哈哈"}]}}) + "\n")
+    # subagent: turn0 tool_use + 分离 tool_result 含目标词
+    with open(os.path.join(sdir, "agent-srch.jsonl"), "w") as f:
+        f.write(json.dumps({"type": "assistant", "timestamp": "2026-06-18T10:00:01+08:00",
+                            "message": {"role": "assistant", "stop_reason": "tool_use",
+                            "content": [{"type": "tool_use", "id": "tu-s", "name": "Bash",
+                                         "input": {"command": "echo hi"}}]}}) + "\n")
+        f.write(json.dumps({"type": "user", "timestamp": "2026-06-18T10:00:02+08:00",
+                            "message": {"role": "user", "content": [{"type": "tool_result",
+                            "tool_use_id": "tu-s", "content": "sub fleet目标token result"}]}}) + "\n")
+    port = _free_port()
+    proc = _start(port, f"scan:{tmp}")
+    try:
+        check(_wait_ready(port), "DS2 server ready (scan source)")
+        # 命中: root text + subagent tool_result
+        status, body = _get(port, "/api/search?q=" + quote("fleet目标token"))
+        check(status == 200, "DS2 /api/search 200")
+        got = json.loads(body)
+        check(got.get("query") == "fleet目标token", "DS2 query 回显")
+        check(isinstance(got.get("truncated"), bool), "DS2 truncated 字段在 (bool)")
+        hits = got.get("hits") or []
+        check(got.get("totalHits", 0) >= 2, "DS2 totalHits ≥ 2 (root + subagent)")
+        roots = [h for h in hits if h.get("agentType") == "root"]
+        subs = [h for h in hits if h.get("agentType") == "subagent"]
+        check(len(roots) >= 1, "DS2 有 root 命中")
+        check(len(subs) >= 1, "DS2 有 subagent 命中")
+        check(roots[0].get("agentId") is None and roots[0].get("field") == "text", "DS2 root 命中 agentId=null field=text")
+        check(subs[0].get("agentId") == "srch" and subs[0].get("field") == "tool_result", "DS2 sub 命中 agentId=srch field=tool_result")
+        check(roots[0].get("sid") == sid and subs[0].get("sid") == sid, "DS2 hit 带 sid")
+        check(got.get("scope") == "fleet", "DS2 fleet 响应 scope=fleet")
+        # session scope (?sid=): 该 session 的 root + subagent (fixture 只 1 session → == fleet 的 2 命中)
+        ss, sb = _get(port, "/api/search?q=" + quote("fleet目标token") + "&sid=" + sid)
+        gd = json.loads(sb)
+        check(ss == 200 and gd.get("scope") == "session", "DS2 session scope 200 scope=session")
+        check(gd.get("totalHits", 0) == 2, "DS2 session scope totalHits=2 (root+subagent 同 session)")
+        # spawn scope (?sid=&agentId=srch): 仅该 subagent transcript (1 命中 tool_result)
+        ps, pb = _get(port, "/api/search?q=" + quote("fleet目标token") + "&sid=" + sid + "&agentId=srch")
+        pd = json.loads(pb)
+        check(ps == 200 and pd.get("scope") == "spawn", "DS2 spawn scope 200 scope=spawn")
+        check(pd.get("totalHits", 0) == 1, "DS2 spawn scope totalHits=1 (仅 subagent)")
+        ph = (pd.get("hits") or [{}])[0]
+        check(ph.get("agentType") == "subagent" and ph.get("agentId") == "srch", "DS2 spawn scope 命中=subagent srch")
+        # spawn scope root (?sid=&agentId=root): 仅 root 主线 transcript (1 命中 text)
+        rs, rb = _get(port, "/api/search?q=" + quote("fleet目标token") + "&sid=" + sid + "&agentId=root")
+        rd = json.loads(rb)
+        check(rs == 200 and rd.get("totalHits", 0) == 1, "DS2 spawn scope root totalHits=1 (仅 root)")
+        rh = (rd.get("hits") or [{}])[0]
+        check(rh.get("agentType") == "root" and rh.get("agentId") is None, "DS2 spawn scope root 命中=root agentId=null")
+        # spawn scope 不存在 agentId → 200 空命中 (agent 文件不存在跳过, 非 404; 红线 7 友好退化)
+        ns, nb = _get(port, "/api/search?q=" + quote("fleet目标token") + "&sid=" + sid + "&agentId=nope")
+        check(ns == 200 and (json.loads(nb).get("hits") or []) == [], "DS2 spawn scope 不存在 agent → 200 [] (跳过缺文件)")
+        # 空 query → 400
+        s400a, _ = _get(port, "/api/search?q=")
+        check(s400a == 400, "DS2 空 query → 400")
+        # 1 字符 → 400
+        s400b, _ = _get(port, "/api/search?q=x")
+        check(s400b == 400, "DS2 1 字符 → 400")
+        # 无命中 → 200 []
+        s200, b2 = _get(port, "/api/search?q=" + quote("zzz不存在词"))
+        check(s200 == 200 and (json.loads(b2).get("hits") or []) == [], "DS2 无命中 → 200 hits=[]")
+    finally:
+        proc.terminate(); proc.wait()
+
+
+def test_fleet_search_frontend_contract():
+    """DS3: turn 搜索前端契约 — 顶部单框 scope 自适应. index.html DOM id (#fleet-search/#search-go) +
+    app.js scope 机器 (currentSearchScope/runScopedSearch/renderScopedSearch/initFleetSearch/highlightSnippet) +
+    各 view 结果容器 (l2/l3/l4-search-results) + /api/search?…&sid=&agentId= scope 参数 + _drillFromSkill 复用 +
+    style.css (.search-result-row/mark/#fleet-search). 三方共识, 镜像 DB2/DB3."""
+    html = open(os.path.join(HERE, "..", "dashboard", "static", "index.html")).read()
+    check('id="fleet-search"' in html, "DS3 index.html 含 #fleet-search 输入框")
+    check('id="search-results"' in html, "DS3 index.html 含 #search-results 容器 (fleet scope)")
+    check('id="search-go"' in html, "DS3 index.html 含 #search-go 按钮")
+    appjs = open(os.path.join(HERE, "..", "dashboard", "static", "app.js")).read()
+    check("function initFleetSearch" in appjs, "DS3 app.js 含 initFleetSearch 定义")
+    check(appjs.count("initFleetSearch") >= 2, "DS3 app.js initFleetSearch ≥2 (def + 入口注册)")
+    check("function currentSearchScope" in appjs, "DS3 app.js 含 currentSearchScope (scope 跟随视图)")
+    check("function runScopedSearch" in appjs, "DS3 app.js 含 runScopedSearch (按 scope 取容器 + 发请求)")
+    check("function renderScopedSearch" in appjs, "DS3 app.js 含 renderScopedSearch (按 scope 渲染)")
+    check("function highlightSnippet" in appjs, "DS3 app.js 含 highlightSnippet 定义")
+    # 各 view 自带结果容器 (fleet-view 钻进后被 hidden → 每层 view 各带一个)
+    check('id="l2-search-results"' in appjs, "DS3 app.js showSession 注入 #l2-search-results (session scope)")
+    check('id="l3-search-results"' in appjs, "DS3 app.js showSpawn/showRoot 注入 #l3-search-results (spawn/root scope)")
+    check('id="l4-search-results"' in appjs, "DS3 app.js showTurn 注入 #l4-search-results (turn 原文页 scope)")
+    check('"/api/search?q=' in appjs, "DS3 app.js 发 /api/search 请求")
+    check('"&sid=" + encodeURIComponent' in appjs or "&sid=" in appjs, "DS3 app.js URL 带 sid scope 参数")
+    check('"&agentId=" + encodeURIComponent' in appjs or "&agentId=" in appjs, "DS3 app.js URL 带 agentId scope 参数")
+    check("_drillFromSkill" in appjs, "DS3 app.js 复用 _drillFromSkill 钻取 (root agentId=null 判定)")
+    check("<mark>" in appjs, "DS3 app.js 高亮插 <mark>")
+    check('data-target="turn"' in appjs, "DS3 app.js 搜索结果行 target=turn (钻 turn 原文)")
+    # 搜索结果生命周期: 跨层保留 (show* 末尾 restore) + 手动清 (✕) + 切源清
+    check("let _searchCache" in appjs, "DS3 app.js 含 _searchCache (跨层保留缓存)")
+    check("function _restoreSearchForCurrentView" in appjs, "DS3 app.js 含 _restoreSearchForCurrentView (show* 重建后重画缓存)")
+    check("function _clearCurrentSearch" in appjs, "DS3 app.js 含 _clearCurrentSearch (✕ 手动清当前 view)")
+    check("function _clearAllSearch" in appjs, "DS3 app.js 含 _clearAllSearch (切源清全部)")
+    check(appjs.count("_restoreSearchForCurrentView();") == 4, "DS3 app.js show* 四处末尾调 _restoreSearchForCurrentView (session/spawn/root/turn)")
+    check('"search-clear"' in appjs, "DS3 app.js sec-head 注入 ✕ 清除按钮 (class search-clear)")
+    check("_clearAllSearch();" in appjs, "DS3 app.js applySource 切源成功调 _clearAllSearch")
+    css = open(os.path.join(HERE, "..", "dashboard", "static", "style.css")).read()
+    check(".search-result-row" in css, "DS3 style.css 含 .search-result-row")
+    check("#fleet-search" in css, "DS3 style.css 含 #fleet-search")
+    check("mark {" in css or "mark{" in css, "DS3 style.css 含 mark 高亮规则")
+    check('[data-theme="light"] mark' in css, "DS3 style.css 浅色主题 mark 覆盖")
+    check(".search-clear" in css, "DS3 style.css 含 .search-clear (✕ 清除按钮样式)")
+
+
 if __name__ == "__main__":
     test_api_result_file_source()
     test_static_routes_and_scaffolding()
@@ -2672,4 +2842,7 @@ if __name__ == "__main__":
     test_root_detail_frontend()
     test_generation_tag_frontend()
     test_budget_chip_frontend()
+    test_search_turns_unit()
+    test_search_endpoint()
+    test_fleet_search_frontend_contract()
     print(f"\n{PASSED} PASS / 0 FAIL")

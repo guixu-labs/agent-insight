@@ -900,6 +900,113 @@ def agent_turn_raw(path, turn_index, limit=200000):
         return None
 
 
+def _flatten_content(content):
+    """tool_result.content → 纯文本 (str|list → str; 镜像 _content_char_count 但返字符串而非计数). 供 search 片段窗口."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for blk in content:
+            if isinstance(blk, dict):
+                t = blk.get("text") or blk.get("content")
+                if isinstance(t, str):
+                    parts.append(t)
+        return "".join(parts)
+    return ""
+
+
+def _mk_hit(turn_index, ts, field, tool_name, text, pos, qlen):
+    """构造一条 turn 搜索命中 (snippet = pos 前后 40 字符窗口; matchStart = 命中在 snippet 内的偏移)."""
+    snip_start = max(0, pos - 40)
+    snip_end = min(len(text), pos + qlen + 40)
+    snippet = text[snip_start:snip_end]
+    return {"turnIndex": turn_index, "ts": ts, "field": field,
+            "toolName": tool_name, "snippet": snippet, "matchStart": pos - snip_start}
+
+
+def _first_turn_hit(m, q, qlen, result_map):
+    """一 turn 内首个命中 (按 text → tool_use → tool_result 序查; 无则 None).
+    一 turn 只记首条 (turn 粒度, 跨 field 按优先级). tool_result 经 result_map 反查 (空间分离, F9 全文索引配对)."""
+    for blk in m["blocks"]:                       # 1) assistant 文本块
+        if isinstance(blk, dict) and blk.get("type") == "text":
+            t = blk.get("text")
+            if isinstance(t, str):
+                p = t.lower().find(q)
+                if p >= 0:
+                    return _mk_hit(m["i"], m["ts"], "text", None, t, p, qlen)
+    tid2name = {}
+    for blk in m["blocks"]:                       # 2) tool_use input (json 序列化后搜, 正则元字符当字面量)
+        if isinstance(blk, dict) and blk.get("type") == "tool_use":
+            s = json.dumps(blk.get("input"), ensure_ascii=False)
+            p = s.lower().find(q)
+            if p >= 0:
+                return _mk_hit(m["i"], m["ts"], "tool_use", blk.get("name"), s, p, qlen)
+            if blk.get("id"):
+                tid2name[blk["id"]] = blk.get("name")
+    for tid in m["tool_use_ids"]:                 # 3) tool_result (result_map 反查该 turn 的 tool_use)
+        rc = result_map.get(tid)
+        if rc:
+            p = rc.lower().find(q)
+            if p >= 0:
+                return _mk_hit(m["i"], m["ts"], "tool_result", tid2name.get(tid), rc, p, qlen)
+    return None
+
+
+def search_turns(path, query, max_turn_hits=20):
+    """单 transcript 文件 → query 命中清单 (fleet 全局 turn 搜索, on-demand 只读).
+
+    case-insensitive substring (用 str.lower() + find; 正则元字符天然当字面量, 无 re 注入). 复用
+    _collect_turns_by_message 拿 turn 序 (i 与 /api/turn/<i> 同空间, 搜索结果点进去对得上 turn) + 第二小遍扫
+    user 行建 tool_use_id→content (tool_result 与 tool_use 常空间分离, 镜像 agent_turn_raw 的 result_map).
+
+    hit: {turnIndex, ts, field:'text'|'tool_use'|'tool_result', toolName, snippet, matchStart}.
+    一 turn 至多一条命中 (首条优先); 满 max_turn_hits 早停.
+    bulletproof: 无文件/空 query/<2 字符/异常 → [] (绝不拖垮 fleet 搜索; 红线 7)."""
+    if not path or not os.path.isfile(path) or not isinstance(query, str):
+        return []
+    q = query.strip().lower()
+    if len(q) < 2:
+        return []
+    try:
+        messages = _collect_turns_by_message(path)
+        if not messages:
+            return []
+        result_map = {}   # tool_use_id → content_str (扫 user 行; tool_result 与 tool_use 空间分离须全文索引)
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict) or obj.get("type") != "user":
+                    continue
+                msg = obj.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content")
+                if not isinstance(content, list):
+                    continue
+                for blk in content:
+                    if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                        tid = blk.get("tool_use_id")
+                        if tid and tid not in result_map:
+                            result_map[tid] = _flatten_content(blk.get("content"))
+        qlen = len(q)
+        hits = []
+        for m in messages:
+            h = _first_turn_hit(m, q, qlen, result_map)
+            if h:
+                hits.append(h)
+                if len(hits) >= max_turn_hits:
+                    break
+        return hits
+    except Exception:
+        return []
+
+
 def load_transcript(args):
     """Mode B ingest 入口 (契约同 analyze.load_records): 返回 (records, nfiles, skipped).
 

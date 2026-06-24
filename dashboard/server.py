@@ -37,9 +37,9 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))   # import transcript_adap
 try:
     from transcript_adapter import (discover_root_transcripts, agent_spawn_head,
                                     agent_turn_traces, agent_turn_raw, root_context_samples,
-                                    count_tool_errors, count_ctx_limit_errors)
+                                    count_tool_errors, count_ctx_limit_errors, search_turns)
 except ImportError:
-    discover_root_transcripts = agent_spawn_head = agent_turn_traces = agent_turn_raw = root_context_samples = count_tool_errors = count_ctx_limit_errors = None
+    discover_root_transcripts = agent_spawn_head = agent_turn_traces = agent_turn_raw = root_context_samples = count_tool_errors = count_ctx_limit_errors = search_turns = None
 DEFAULT_PORT = 8765
 BROWSE_ROOT = os.path.expanduser(os.environ.get("AGENTINSIGHT_BROWSE_ROOT", "~"))   # /api/browse 可信根 (默认 home)
 
@@ -317,6 +317,9 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_root(path[len("/api/root/"):])
         elif path.startswith("/api/turn/"):
             self._handle_turn(path[len("/api/turn/"):])
+        elif path == "/api/search":
+            qs = parse_qs(urlparse(self.path).query)
+            self._handle_search(qs.get("q", [None])[0], qs.get("sid", [None])[0], qs.get("agentId", [None])[0])
         elif path == "/":
             self._serve_static("index.html", "text/html; charset=utf-8")
         elif path.startswith("/static/"):
@@ -431,6 +434,103 @@ class Handler(BaseHTTPRequestHandler):
         if not match:
             return None, f"sid not found: {sid}", 404
         return match[0], None, 200
+
+    def _enumerate_sessions(self):
+        """当前 SOURCE → [(sid, root_path, project), ...] 供 turn 搜索枚举 (抽 _resolve_root_path 的源分支).
+        transcript: 单文件; live: discover_root_transcripts(proot) 全部 root transcript;
+        scan / scan:DIR: STATE.scanDir + discover_root_transcripts; file:/jsonl:/其他 → [] (无可搜 transcript).
+        顶层 try/except 兜底 (per-session 隔离, 红线 7). project = root transcript 所在目录名."""
+        sessions = []
+        try:
+            if SOURCE.startswith("transcript:"):
+                root_path = SOURCE[len("transcript:"):]
+                if os.path.isfile(root_path):
+                    base = os.path.basename(root_path)
+                    sid = base[:-len(".jsonl")] if base.endswith(".jsonl") else base
+                    sessions.append((sid, root_path, os.path.basename(os.path.dirname(root_path))))
+            elif _source_is_live(SOURCE):
+                if discover_root_transcripts:
+                    proot = (os.environ.get("AGENTINSIGHT_PROJECTS_ROOT", "").strip()
+                             or os.path.expanduser("~/.claude/projects"))
+                    for rp in sorted(discover_root_transcripts(proot)):
+                        base = os.path.basename(rp)
+                        sid = base[:-len(".jsonl")] if base.endswith(".jsonl") else base
+                        sessions.append((sid, rp, os.path.basename(os.path.dirname(rp))))
+            else:   # scan / scan:DIR
+                if discover_root_transcripts:
+                    result, _ = STATE.get()
+                    scan_dir = (result or {}).get("scanDir")
+                    if scan_dir:
+                        for rp in discover_root_transcripts(scan_dir):
+                            base = os.path.basename(rp)
+                            sid = base[:-len(".jsonl")] if base.endswith(".jsonl") else base
+                            sessions.append((sid, rp, os.path.basename(os.path.dirname(rp))))
+        except Exception:
+            pass
+        return sessions
+
+    def _session_search_targets(self, root_path, sid, agent_id):
+        """一个 session 内要搜的 (agentId_or_None, transcript_path, agentType) 列表.
+        spawn scope (agent_id 给定): 单 transcript — agent_id=='root' → root 主线 transcript; 否则该 subagent agent-<id>.jsonl.
+        session/fleet scope (agent_id=None): root transcript + 全部 subagents (glob, 排 .meta. sidecar)."""
+        if agent_id:
+            if agent_id == "root":
+                return [(None, root_path, "root")]
+            return [(agent_id, self._agent_path(root_path, sid, agent_id), "subagent")]
+        out = [(None, root_path, "root")]
+        sub_glob = os.path.join(os.path.dirname(root_path), sid, "subagents", "agent-*.jsonl")
+        for sp in sorted(glob.glob(sub_glob)):
+            nm = os.path.basename(sp)
+            if ".meta." in nm:
+                continue
+            aid = nm[len("agent-"):-len(".jsonl")] if nm.endswith(".jsonl") else nm[len("agent-"):]
+            out.append((aid, sp, "subagent"))
+        return out
+
+    def _handle_search(self, q, sid=None, agent_id=None):
+        """GET /api/search?q=X[&sid=S][&agentId=A] → turn 内容搜索 (on-demand 只读 · 不进 2s live-poll).
+        scope 跟随参数: 无 sid=fleet 全部 session; 仅 sid=session (该 session root+subagents); sid+agentId=spawn 单 transcript
+        (agentId='root' → root 主线). 前端顶部单搜索框据当前钻取层级传参. per-file 错误隔离 (红线 7); MAX_HITS 防淹没.
+        root 命中 agentId=None (前端 _drillFromSkill 判 root 靠 null/空, 非 'root'). 响应附 scope 字段供前端标题.
+        400 空/<2 字符; 500 adapter 不可用; 503 顶层异常; scope 解析失败 → 200 空命中 (前端 '无命中' 提示, 非 404)."""
+        if not q or len(q.strip()) < 2:
+            self._send_json({"error": "query too short (需 ≥2 字符)"}, code=400)
+            return
+        scope = "spawn" if (sid and agent_id) else ("session" if sid else "fleet")
+        try:
+            if not search_turns:
+                self._send_json({"error": "search_turns 不可用"}, code=500)
+                return
+            MAX_HITS = 200
+            if sid:                                  # session / spawn scope: 单 session
+                root_path, err, _code = self._resolve_root_path(sid)
+                if err or not root_path:
+                    self._send_json({"query": q, "totalHits": 0, "truncated": False, "hits": [], "scope": scope})
+                    return
+                project = os.path.basename(os.path.dirname(root_path))
+                sessions = [(sid, root_path, project)]
+            else:                                    # fleet scope: 全部 session
+                sessions = self._enumerate_sessions()
+            hits = []
+            truncated = False
+            for sid_, root_path, project in sessions:
+                try:
+                    for aid, path, atype in self._session_search_targets(root_path, sid_, agent_id):
+                        if not os.path.isfile(path):
+                            continue
+                        for h in search_turns(path, q):
+                            hits.append({**h, "sid": sid_, "project": project, "agentId": aid, "agentType": atype})
+                            if len(hits) >= MAX_HITS:
+                                truncated = True; break
+                        if truncated:
+                            break
+                    if truncated:
+                        break
+                except Exception:
+                    continue
+            self._send_json({"query": q, "totalHits": len(hits), "truncated": truncated, "hits": hits, "scope": scope})
+        except Exception as e:
+            self._send_json({"error": f"{type(e).__name__}: {e}"}, code=503)
 
     def _handle_session(self, sid):
         """/api/session/<sid>: sid→root path → transcript: source (callChains + rootContext, Plan 3a)."""

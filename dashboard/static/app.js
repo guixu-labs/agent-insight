@@ -887,6 +887,7 @@ function showSession(d, sid) {
     + `<span class="chip">ctx peak <b>${fmt(peak)}</b></span>`
     + `</div></div>`
     + healthHtml
+    + '<section class="card hidden" id="l2-search-results"></section>'   // 顶部搜索框 session-scope 结果容器 (hidden · scope=本 session)
     + `<section class="card"><div class="sec-head"><h2>时间轴 · wall-clock</h2>`
     + `<span class="note">轴 0→总时长 (已去 ms) · 段=subagent (长=duration, 色=type) · 上方紫点=root 主线 turn (离散, 琥珀环=ctx peak, 点进看原文) · 段间空档: "含 N root turn"=root 在活动 / "空闲 Nm"=真空 · 竖线=异步启动 (×N=同 turn 并发) · 点段/线看详情</span></div>`
     + `<div class="gantt-axis"><span>0</span><span>${fmtDurMs(span / 2)}</span><span>${fmtDurMs(span)}</span></div>`
@@ -1003,6 +1004,7 @@ function showSession(d, sid) {
     agentListEl.addEventListener("mouseleave", () =>
       v.querySelectorAll(".gantt-seg.hl, .gantt-async.hl").forEach(el => el.classList.remove("hl")));
   }
+  _restoreSearchForCurrentView();   // 跨层保留: showSession 重建清空了 l2 容器 → 重画缓存的本 session 搜索
 }
 
 function backToFleet() {
@@ -1158,6 +1160,7 @@ function showSpawn(d, agentId, focusTurn) {
   const v = document.getElementById("level3-view");
   v.classList.remove("hidden");
   v.innerHTML = `<button class="back-btn">← 返回 session</button>` + headHtml + callout
+    + '<section class="card hidden" id="l3-search-results"></section>'   // 顶部搜索框 spawn-scope 结果容器 (hidden · scope=本 spawn)
     + `<section class="card"><div class="sec-head"><h2>逐 turn traces · ${turns.length} turns</h2>`
     + `<span class="note">usage 非零→真 token; 记 0→result 字符数代理* · ⚠ = 本 turn 新进上下文 (input+cc) &gt;1.5×均值 · 点行→看原文${focusTurn!=null?` · 当前定位 turn #${focusTurn}`:""}</span></div>`
     + `<div class="turn-list">${renderTurnList(turns, false, focusTurn) || '<span class="faint">无 turn (空 spawn / 平台边界).</span>'}</div></section>`;
@@ -1174,6 +1177,7 @@ function showSpawn(d, agentId, focusTurn) {
     const row = e.target.closest(".turn-row");
     if (row && row.dataset.turn != null) drillTurn(_spawnAgentId, row.dataset.turn);
   });
+  _restoreSearchForCurrentView();   // 跨层保留: showSpawn 重建清空了 l3 容器 → 重画缓存的本 spawn 搜索
 }
 
 function showRoot(d, focusTurn) {
@@ -1218,6 +1222,7 @@ function showRoot(d, focusTurn) {
   const v = document.getElementById("level3-view");
   v.classList.remove("hidden");
   v.innerHTML = `<button class="back-btn">← 返回 session</button>` + headHtml + callout
+    + '<section class="card hidden" id="l3-search-results"></section>'   // 顶部搜索框 root-scope 结果容器 (hidden · _spawnAgentId="root" → scope=root 主线)
     + `<section class="card"><div class="sec-head"><h2>逐 turn traces · ${turns.length} turns</h2>`
     + `<span class="note">点行→看原文${focusTurn!=null?` · 当前定位 turn #${focusTurn}`:""} · ⚠ = 本 turn 新进上下文 (input+cc) &gt;1.5×均值</span></div>`
     + `<div class="turn-list">${renderTurnList(turns, false, focusTurn) || '<span class="faint">无 turn.</span>'}</div></section>`;
@@ -1236,6 +1241,7 @@ function showRoot(d, focusTurn) {
     const row = e.target.closest(".turn-row");
     if (row && row.dataset.turn != null) drillTurn(_spawnAgentId, row.dataset.turn);
   });
+  _restoreSearchForCurrentView();   // 跨层保留: showRoot 重建清空了 l3 容器 → 重画缓存的 root 主线搜索
 }
 
 function backToSession() {
@@ -1300,11 +1306,13 @@ function showTurn(d, turnIndex) {
     + `<div class="raw-tag">turn 原文 · 直接读自 ${rawSrc}（逐字未改的原始记录 · 不依赖 token 聚合）</div>`
     + `<div class="l4-head"><h1>${isRoot ? "root " : ""}turn #${turnIndex} <span class="faint">· ${esc(d.stop_reason||"?")}</span></h1>`
     + `<div class="meta-chips">${usage}</div></div>`
+    + '<section class="card hidden" id="l4-search-results"></section>'   // 顶部搜索框 scope=该 turn 所属 spawn/root (Level 4 仍可搜)
     + (bodyHtml || '<span class="faint">空 turn.</span>');
   v.querySelector(".back-btn").addEventListener("click", backToSpawn);
   // 折叠展开 (§8.6: 默认折叠, 点开全展)
   v.querySelectorAll(".foldable").forEach(el =>
     el.addEventListener("click", () => el.classList.toggle("expanded")));
+  _restoreSearchForCurrentView();   // 跨层保留: showTurn 重建清空了 l4 容器 → 重画缓存的该 turn 所属搜索
 }
 
 function backToSpawn() {
@@ -1425,6 +1433,7 @@ function initSourceSwitcher() {
       .then(({ok, body}) => {
         if (ok) {                        // 切源成功 → 回 fleet-view 重拉新源
           resetToFleet();
+          _clearAllSearch();             // 切源 → drill 上下文失效, 旧源搜索命中无意义, 清缓存+所有容器+框
           fetch("/api/result").then(rr => rr.json()).then(render).catch(() => {});
           syncFromCurrent(body.current);   // body.current 是 server 推断后真实 source (带 prefix)
         } else {                          // 400 非法 / 503 refresh 失败 (server 已回滚) → 报错 + 回填
@@ -1536,6 +1545,148 @@ function jumpToAgentsPanel() {
   setTimeout(() => pan.classList.remove("flash"), 1200);
 }
 
+// === turn 搜索 (顶部单框 · scope 跟随当前钻取层级: 总览=全部 / session=本 session / spawn=本 spawn) ===
+// on-demand 只读, 不进 live-tail 2s 轮询. 结果渲染进当前可见视图自带的 hidden 容器 (fleet-view 钻进后被 hidden,
+// 故每层 view 各带一个容器). 点命中行 → _drillFromSkill 钻进那个 turn 原文 (它重建 session ctx, 从任意层级都对).
+function highlightSnippet(snippet, q) {
+  // 先 esc 再插 <mark> (防 XSS). snippet 是后端原文, matchStart 仅提示; 实际在 esc 后的串里重新定位
+  // esc(q).toLowerCase() —— esc 只扩展长度不改字符, 故 esc(q) 仍是 esc(snippet) 的子串 (大小写折叠致长度
+  // 变的极罕见边界下找不到 → 退化只 esc 不高亮, 安全).
+  const e = esc(snippet);
+  const needle = esc(q).toLowerCase();
+  const p = e.toLowerCase().indexOf(needle);
+  if (p < 0) return e;
+  return e.slice(0, p) + "<mark>" + e.slice(p, p + needle.length) + "</mark>" + e.slice(p + needle.length);
+}
+
+function _hidden(id) { const el = document.getElementById(id); return !el || el.classList.contains("hidden"); }
+
+function currentSearchScope() {
+  // 顶部搜索框始终在; scope 跟随当前可见视图 → 结果渲染进该视图内自带容器 (l2/l3/l4-search-results / search-results).
+  // Level 4 (turn 原文): scope = 该 turn 所属 spawn/root (复用 _spawnAgentId). Level 3 root: "root 主线" 非 "本 spawn".
+  const isRoot = (_spawnAgentId === "root");
+  if (!_hidden("level4-view")) return { sid: _sessionCtx && _sessionCtx.sid, agentId: _spawnAgentId, resId: "l4-search-results", label: "本 turn 所属 " + (isRoot ? "root 主线" : "spawn") };
+  if (!_hidden("level3-view")) return { sid: _sessionCtx && _sessionCtx.sid, agentId: _spawnAgentId, resId: "l3-search-results", label: isRoot ? "root 主线" : "本 spawn" };
+  if (!_hidden("level2-view")) return { sid: _sessionCtx && _sessionCtx.sid, agentId: null, resId: "l2-search-results", label: "本 session" };
+  return { sid: null, agentId: null, resId: "search-results", label: "跨 session" };
+}
+
+// === 搜索结果生命周期 (跨层保留 + 手动清 + 切源清) ===
+// - 跨层保留: show* (showSession/showSpawn/showRoot/showTurn) 重建会清空结果容器 → 末尾调 _restoreSearchForCurrentView 重画缓存;
+//   back 路径 (backToSession/backToSpawn) 不重建 → 容器内容自然保留. key = resId|sid|agentId (spawn vs root 同用 l3 容器, 靠 agentId 区分).
+// - 手动清: 结果 sec-head 的 ✕ → _clearCurrentSearch (清当前 view 缓存 + 容器 + 搜索框).
+// - 切源清: applySource 成功 → _clearAllSearch (drill 上下文失效, 旧源命中无意义).
+let _searchCache = {};
+function _searchCacheKey(sc) {
+  return (sc.resId || "") + "|" + (sc.sid || "") + "|" + (sc.agentId || "");
+}
+function _restoreSearchForCurrentView() {
+  const sc = currentSearchScope();
+  const c = _searchCache[_searchCacheKey(sc)];
+  const box = document.getElementById(sc.resId);
+  if (c && box) {
+    renderScopedSearch(box, c.data, c.q, c.label, false);   // scroll=false: 跨层往返不抢滚动位
+    const input = document.getElementById("fleet-search");
+    if (input && !input.value) input.value = c.q;            // 框文与结果一致 (仅用户没在打字时回填)
+  }
+}
+function _clearCurrentSearch() {
+  const sc = currentSearchScope();
+  delete _searchCache[_searchCacheKey(sc)];
+  const box = document.getElementById(sc.resId);
+  if (box) { box.innerHTML = ""; box.classList.add("hidden"); }
+  const input = document.getElementById("fleet-search");
+  if (input) input.value = "";
+}
+function _clearAllSearch() {
+  _searchCache = {};
+  ["search-results", "l2-search-results", "l3-search-results", "l4-search-results"].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) { b.innerHTML = ""; b.classList.add("hidden"); }
+  });
+  const input = document.getElementById("fleet-search");
+  if (input) input.value = "";
+}
+
+function runScopedSearch(box, q, sid, agentId, label) {
+  if (!box) return;
+  box.classList.remove("hidden");
+  box.innerHTML = '<div class="sec-head"><h2>搜 turn…</h2></div><p class="faint">扫描 ' + esc(label) + "…</p>";
+  let url = "/api/search?q=" + encodeURIComponent(q);
+  if (sid) { url += "&sid=" + encodeURIComponent(sid); if (agentId) url += "&agentId=" + encodeURIComponent(agentId); }
+  fetch(url).then(r => r.json())
+    .then(d => {
+      _searchCache[_searchCacheKey({ resId: box.id, sid: sid, agentId: agentId })] = { q: q, label: label, data: d };
+      renderScopedSearch(box, d, q, label, true);
+    })
+    .catch(e => { box.innerHTML = '<div class="sec-head"><h2>搜 turn</h2></div><p class="faint">请求失败: ' + esc(String(e)) + "</p>"; });
+}
+
+function renderScopedSearch(box, d, q, label, scroll) {
+  box.classList.remove("hidden");
+  // sec-head 统一带 ✕ (手动清当前 view 搜索); noteHtml 可选 (hits 分支带 范围·q·截断提示).
+  const secHead = (title, noteHtml) =>
+    '<div class="sec-head"><h2>' + esc(title) + '</h2>' + (noteHtml || '')
+    + '<button class="search-clear" type="button" title="清掉搜索结果 (并清空搜索框)">✕</button></div>';
+  if (d.error) {
+    box.innerHTML = secHead("搜 turn") + '<p class="faint">搜索失败: ' + esc(d.error) + "</p>";
+  } else {
+    const hits = d.hits || [];
+    if (!hits.length) {
+      box.innerHTML = secHead("搜 turn · 无命中")
+        + '<p class="faint">' + esc(label) + ' 内没有 turn 原文包含 “' + esc(q) + '”</p>';
+    } else {
+      const FIELD_LABEL = { text: "文本", tool_use: "工具输入", tool_result: "工具结果" };
+      // 按 sid 分组 (保命中序). fleet 多 session → 组头 project/sid; session/spawn 单 sid → 省组头 (agentTag 每行已有).
+      const groups = new Map();
+      for (const h of hits) { (groups.get(h.sid) || groups.set(h.sid, []).get(h.sid)).push(h); }
+      const fleetScope = !d.scope || d.scope === "fleet";
+      const note = '<span class="note">' + esc(label) + ' · “' + esc(q) + '”' + (d.truncated ? " · 结果过多已截断 (仅前 " + hits.length + " 条)" : "")
+        + " · 点行 → turn 原文</span>";
+      let html = secHead("搜 turn · " + hits.length + " 命中", note);
+      for (const [sid, g] of groups) {
+        if (fleetScope) {
+          html += '<div class="search-group"><div class="search-grp-head">'
+            + projName(g[0].project) + ' · <span class="faint">sid ' + esc(String(sid).slice(0, 8)) + "</span> · " + g.length + " 命中</div>";
+        }
+        for (const h of g) {
+          const agentTag = h.agentType === "root" ? "root" : "agent " + esc(String(h.agentId || "").slice(0, 8));
+          const field = FIELD_LABEL[h.field] || h.field;
+          const tool = h.toolName ? " · " + esc(h.toolName) : "";
+          // root 命中 data-agent="" → _drillFromSkill 的 `agentId || null` 得 null → 走 drillRoot (非 drillSpawn('root')→404).
+          html += '<div class="search-result-row" '
+            + 'data-sid="' + esc(sid) + '" data-agent="' + (h.agentId == null ? "" : esc(h.agentId)) + '" '
+            + 'data-turn="' + esc(h.turnIndex) + '" data-target="turn" title="点 → 钻进该 turn 原文">'
+            + '<span class="sr-meta">' + agentTag + " · turn " + esc(h.turnIndex) + " · " + field + tool + "</span>"
+            + '<span class="sr-snippet">' + highlightSnippet(h.snippet, q) + "</span></div>";
+        }
+        if (fleetScope) html += "</div>";
+      }
+      box.innerHTML = html;
+      box.querySelectorAll(".search-result-row").forEach(el =>
+        el.addEventListener("click", () =>
+          _drillFromSkill(el.dataset.sid, el.dataset.agent || null, el.dataset.turn, el.dataset.target || "turn")));
+      if (scroll) box.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+  box.querySelector(".search-clear")?.addEventListener("click", _clearCurrentSearch);
+}
+
+function initFleetSearch() {
+  // 顶部单搜索框: scope 跟随当前钻取层级 (currentSearchScope 据可见 view 推 sid/agentId/结果容器).
+  const input = document.getElementById("fleet-search");
+  const go = document.getElementById("search-go");
+  if (!input || !go) return;
+  const run = () => {
+    const q = (input.value || "").trim();
+    if (q.length < 2) { alert("搜索需 ≥2 字符"); input.focus(); return; }
+    const sc = currentSearchScope();
+    runScopedSearch(document.getElementById(sc.resId), q, sc.sid, sc.agentId, sc.label);
+  };
+  go.addEventListener("click", run);
+  input.addEventListener("keydown", ev => { if (ev.key === "Enter") run(); });
+}
+
 initHeroClicks();
 initLiveTail();
 initTheme();
@@ -1543,6 +1694,7 @@ initPresets();
 initSourceSwitcher();
 initBrowser();
 initSort();
+initFleetSearch();
 fetch("/api/result").then(r => r.json()).then(render)
 
   .catch(e => { document.getElementById("meta").textContent = "load failed: " + e; });

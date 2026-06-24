@@ -37,6 +37,14 @@
     <button id="source-browse" type="button" title="打开目录浏览弹层 (server /api/browse 读真实 FS · 浏览器原生 file picker 拿不到真实路径, fakepath 铁律)">📁 浏览…</button>
   </div>
 
+  <!-- turn 搜索 (顶部常驻 · scope 跟随当前视图: 总览=全部 session / session 页=本 session / spawn 页=本 spawn · on-demand 不进 live-tail 2s 轮询) -->
+  <div class="search-bar">
+    <label class="src-lab" for="fleet-search">搜 turn</label>
+    <input id="fleet-search" type="text" spellcheck="false"
+           placeholder="搜 turn 原文 · 范围随当前视图（总览=全部 / session / spawn · 命令 · 文件名 · 一句话 · ≥2 字符）">
+    <button id="search-go" type="button" title="搜当前视图范围内的 turn 原文（assistant 文本 + tool 输入 + 结果）· 总览页搜全部 session, session 页搜本 session, spawn 页搜本 spawn">搜</button>
+  </div>
+
   <div id="fleet-view">
 
   <div id="trust-banner"></div>
@@ -62,6 +70,9 @@
       <tbody></tbody>
     </table>
   </section>
+
+  <!-- 全局 turn 搜索结果 (命中按 session 分组 · 点行钻进那个 turn 原文; 未搜索时隐藏) -->
+  <section class="card hidden" id="search-results"></section>
 
   <!-- skill 活跃度 (第二切面 · 零 token 能力画像 · 常驻; 点 skill 行 → inline 展开该 skill 出现在哪些 session / spawn / turn) -->
   <section class="card" id="pane-by-skill">
