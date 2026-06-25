@@ -115,6 +115,92 @@ def write_lineage(record):
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+# ---------- 实时预算事件 emission (opt-in, §10 出口; 2026-06-24) ----------
+_budget_mod = None   # lazy cache (per-process); threshold 未配 / Skill·Bash 轨时不付 import 开销
+
+
+def _get_budget():
+    """lazy import tools/budget (同 _terminal_stats_fn 模式 L160). 失败 → None (emission inert)."""
+    global _budget_mod
+    if _budget_mod is None:
+        try:
+            _tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools")
+            if _tools_dir not in sys.path:
+                sys.path.insert(0, _tools_dir)
+            import budget as _b
+            _budget_mod = _b
+        except Exception:
+            _budget_mod = False   # 标记不可用, 不再重试
+    return _budget_mod if _budget_mod is not False else None
+
+
+def _write_budget_event(event):
+    """append <log_base>/budget-events.jsonl (flock, 复用 write_lineage 模式 L98). base 根 (非 project 子目录) —
+    外部动作层全局订阅面 (跨 project 一个文件 tail)."""
+    base = _log_base()
+    os.makedirs(base, exist_ok=True)
+    path = os.path.join(base, "budget-events.jsonl")
+    lock_path = path + ".lock"
+    line = json.dumps(event, ensure_ascii=False)
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            with open(path, "a") as f:
+                f.write(line + "\n")
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _post_webhook(url, event):
+    """POST JSON 到 url, 短超时 2s, 失败 swallow (红线 1: 网络失败绝不阻断编排)."""
+    import urllib.request
+    data = json.dumps(event, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=2)
+    except Exception:
+        pass
+
+
+def _emit_budget_event(rec, cwd, session_id):
+    """opt-in 实时预算 emission (Agent 轨 write_record 后调). per-session 累计 → 判 → 发.
+
+    - gate: AGENTINSIGHT_BUDGET_THRESHOLD 配了才走 (没配 → inert, 红线 2 不主动发).
+    - 累计: budget._session_cumulative (本 session, 对应外部 handoff 动作层的 per-session handoff 语义; 跨 session 总账见离线 reader).
+    - 出口: 写 budget-events.jsonl (默认) + POST AGENTINSIGHT_BUDGET_WEBHOOK (配了才发).
+    - 不阻断: 全 try/except swallow (红线 1)."""
+    try:
+        b = _get_budget()
+        if not b:
+            return
+        threshold = b._budget_threshold()
+        if not threshold:
+            return   # inert: 没配阈值不算不发 (红线 2)
+        cum = b._session_cumulative(_log_base(), _project_name(cwd), session_id)
+        st = b._budget_state(cum["total"], threshold)
+        if not st:
+            return
+        event = {
+            "schemaVersion": 1,
+            "recordType": "BudgetEvent",
+            "timestamp": datetime.now(_TZ).isoformat(timespec="seconds"),
+            "generationId": rec.get("generationId"),
+            "sessionId": session_id,
+            "projectName": _project_name(cwd),
+            "cumulativeTotal": st["cumulativeTotal"],
+            "threshold": st["threshold"],
+            "pctOfThreshold": st["pctOfThreshold"],
+            "exceeded": st["exceeded"],
+            "tokens": cum,   # 四桶明细 (诊断; cacheRead-inclusive, 红线 6)
+        }
+        _write_budget_event(event)              # 默认: 文件 (外部动作层 tail, 零网络)
+        wh = os.environ.get("AGENTINSIGHT_BUDGET_WEBHOOK", "").strip()
+        if wh:
+            _post_webhook(wh, event)            # opt-in: webhook POST
+    except Exception:
+        pass   # 红线 1: emission 失败绝不阻断编排
+
+
 # ---------- 三轨 record 构造 ----------
 def _common(data):
     """三轨共享字段 (§6). 在线只落原始事实; parent/callChain 留给离线 reader 派生."""
@@ -350,10 +436,10 @@ def record_session_start(data):
         "generationId": effective_id,               # effective_id = carrier ? carrier : sessionId (续接就绪)
         "sessionId": session_id,
         "carrierSource": carrier_src,               # 诊断: env / handoff-file / null
-        "source": data.get("source") or None,       # CC payload.source: startup/resume/clear/compact; 缺则 None (Breather 写无此字段)
-        "writer": "plugin-hook",                    # 区分 Breather 自助写的行 (reader 两 writer 都容错)
+        "source": data.get("source") or None,       # CC payload.source: startup/resume/clear/compact; 缺则 None (外部 writer 无此字段)
+        "writer": "plugin-hook",                    # 区分外部 writer 自助写的行 (reader 两 writer 都容错)
         "projectName": _project_name(data.get("cwd", "") or ""),
-        # prevSessionId: Breather seam (有序链 / wall-clock gap); plugin-hook 不落 — reader 读到就有.
+        # prevSessionId: 外部 writer seam (有序链 / wall-clock gap); plugin-hook 不落 — reader 读到就有.
     })
 
 
@@ -384,6 +470,8 @@ def main():
         else:
             sys.exit(0)   # 非三轨: no-op
         write_record(rec, data.get("cwd", ""))
+        if tool_name == "Agent":
+            _emit_budget_event(rec, data.get("cwd", ""), rec.get("sessionId") or "unknown-session")
     except Exception:
         # 红线: 观测绝不阻断编排 —— 任何异常 swallow (磁盘满 / 字段缺 / 并发冲突)
         pass

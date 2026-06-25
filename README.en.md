@@ -79,11 +79,14 @@ All prefixed `AGENTINSIGHT_*`. Unset → use the default; zero-config to run.
 | `AGENTINSIGHT_PROJECTS_ROOT` | fleet-scan root directory | `~/.claude/projects` |
 | `AGENTINSIGHT_CARRIER_ID` | cross-session continuation carrier (env channel) | none → `generationId` degrades to `sessionId` |
 | `AGENTINSIGHT_CARRIER_FILE` | continuation carrier (handoff-file channel) | none |
-| `AGENTINSIGHT_BUDGET_THRESHOLD` | token threshold for rolling up cumulative budget across sessions by generationId (reader-computed, opt-in) | none → no budget chip shown |
+| `AGENTINSIGHT_BUDGET_THRESHOLD` | token threshold for rolling up cumulative budget across sessions by generationId (reader offline budgetState); **also the real-time emission master switch** (recorder computes+emits only if set) | none → no budget chip, no emission |
+| `AGENTINSIGHT_BUDGET_WEBHOOK` | if set, POST a `BudgetEvent` to this URL after every Agent persist (an external handoff tool subscribes); **requires `BUDGET_THRESHOLD` also set** | none → only writes local `budget-events.jsonl` |
 
 ### Budget metering (budgetState)
 
-Set `AGENTINSIGHT_BUDGET_THRESHOLD` to a token count (e.g. `60000`); the reader rolls up `grandTotal.total` of all sessions in the same logical workflow (by `generationId`) **across sessions into one sum** (cacheRead-inclusive, same basis as the accounting core) and attaches `result.generations[i].budgetState = {threshold, cumulativeTotal, pctOfThreshold, exceeded}`. The dashboard shows a budget chip in the fleet table's total column + the continuation-group header: <80% green / 80–99% amber / ≥100% (threshold reached = exceeded) red. **No threshold set → the field is absent → the table is byte-for-byte identical to today** (graceful opt-in, no new permanent column). The decision logic has a single source (reader-computed); the future Breather real-time event will reuse the same source (emission still deferred).
+Set `AGENTINSIGHT_BUDGET_THRESHOLD` to a token count (e.g. `60000`); the reader rolls up `grandTotal.total` of all sessions in the same logical workflow (by `generationId`) **across sessions into one sum** (cacheRead-inclusive, same basis as the accounting core) and attaches `result.generations[i].budgetState = {threshold, cumulativeTotal, pctOfThreshold, exceeded}`. The dashboard shows a budget chip in the fleet table's total column + the continuation-group header: <80% green / 80–99% amber / ≥100% (threshold reached = exceeded) red. **No threshold set → the field is absent → the table is byte-for-byte identical to today** (graceful opt-in, no new permanent column). The decision logic has a single source (`tools/budget.py`, shared by reader offline + recorder real-time emission).
+
+**real-time budget emission (per-session, distinct from the cross-session offline above)**: once `AGENTINSIGHT_BUDGET_THRESHOLD` is set, after every Agent persist the recorder additionally computes the **current session** total in real time (matching an external handoff tool's per-session handoff semantics: single session blows the threshold → trigger immediately) and writes `<log_base>/budget-events.jsonl`; if `AGENTINSIGHT_BUDGET_WEBHOOK` is set, it also POSTs. This is for an external handoff tool to subscribe and trigger handoffs in-process — a different purpose from the cross-session budgetState above (offline review). Opt-in (no emission if threshold unset; preserves zero-coupling).
 
 ## Output
 
@@ -157,7 +160,7 @@ python3 tools/analyze.py --transcript ~/.claude/projects/<proj>/<sid>/ --tree
 
 Reuses the same Mode A pipeline, only swapping the ingest entry point (`tools/transcript_adapter.py` parses the transcript's `toolUseResult`). Output format is identical to Mode A.
 
-**🔴 Hard platform limit**: the CC transcript **only persists structured `toolUseResult` for root-direct Agent calls**; nested calls (a child dispatching another child) only land as message-content text blocks, that row's `toolUseResult=null` → **Mode B can only rebuild depth-2 (root→agent); depth-3+ tokens / topology require the live hook**. Three independent real samples verified all-depth-2, zero nesting.
+**🔴 Hard platform limit**: the CC transcript **only persists structured `toolUseResult` for root-direct Agent calls**; nested calls (a child dispatching another child) only land as message-content text blocks, that row's `toolUseResult=null` → **Mode B can only rebuild depth-2 (root→agent); depth-3+ tokens / topology require the live hook**. Three independent real samples verified all-depth-2, zero nesting. **2026-06-24 live follow-up**: the `general-purpose` subagent doesn't recurse via the Agent tool by default (CC orchestrations basically cap at depth-2); the depth-3+ attribution capability is retained (synthetic unit-tested), but live real data is overwhelmingly depth-2 — the robust selling point is **depth-2 (mainstream) precise per-subagent attribution + topology + single accounting core**.
 
 ### Mode B · fleet — scan a whole projects directory (`--scan-projects`)
 
@@ -234,6 +237,25 @@ python3 tests/test_dashboard.py           # dashboard server contract + scaffold
 ```
 
 All five are isolated (subprocess + temp dir / env), **never touching real sessions / settings.json**. **All green** (2026-06-23 cleared the historical token-basis debt: `grandTotal.total` unified to a four-bucket sum including cacheRead, fixtures aligned).
+
+## Live self-check (whole hook → record → reader verification)
+
+Synthetic unit tests can't cover **real CC platform behavior** — whether the hook actually fires, tokens are actually passed through, depth-3+ nesting is actually captured.
+
+**Prerequisite**: first install the plugin per "Installation" above (`/plugin marketplace add guixu-labs/agent-insight` → `/plugin install agent-insight`, or hand-mount a `PostToolUse` hook in a project-level `.claude/settings.local.json` with `command` pointing at the absolute path of `hooks/record.py`), and run it in an **isolated New Session** (red line 3 / F7: hook config doesn't reload mid-session — restart CC to fire). If the hook isn't firing, `live_check` reports `NO_DATA`.
+
+⚠️ **Important**: `live_check` **only reads already-persisted data — it doesn't produce any itself**. Running it bare yields `NO_DATA` (no orchestration activity in this session yet). You must **first** use `--show-probe` to get a prompt, feed it to CC so CC dispatches a subagent and the hook persists a record, **then** run the check:
+
+```bash
+# Step 1 (produce data, must do first): get a trigger prompt → paste to CC → CC dispatches a subagent → hook persists
+python3 tools/live_check.py --show-probe agent      # Agent-track basic capture (dispatch general-purpose, replies pong)
+python3 tools/live_check.py --show-probe nested     # (optional) depth-3+ nesting, verifies the core moat
+
+# Step 2 (verify): after CC finishes, read on-disk JSONL + full assertions + verdict
+python3 tools/live_check.py
+```
+
+Verdict: `LIVE_OK` (core chain stands: Agent track persisted + token gate + self-consistent) / `CORE_FAIL` (gate failed — take the result back to debug `hooks/record.py` field paths) / `NO_DATA` (hook not mounted). The depth-3+ nested-capture (core moat) is reported separately — captured with correct nested-layer caller = moat holds; otherwise it reports honestly (LLM didn't spawn enough layers / a platform limit was found). It's a status reporter, never blocks orchestration (`exit 0`; only a real error `exit 1`). See `python3 tools/live_check.py --help`.
 
 ## Form and boundaries
 

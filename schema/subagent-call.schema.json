@@ -20,7 +20,7 @@
     },
     "recordType": {
       "type": "string",
-      "enum": ["SubagentCall", "SkillCall", "Command", "GenerationLineage"],
+      "enum": ["SubagentCall", "SkillCall", "Command", "GenerationLineage", "BudgetEvent"],
       "description": "记录类型 = 捕获轨道: Agent / Skill / Bash (三轨 per-event); GenerationLineage = SessionStart lineage 行 (跨 session 续接旁路)"
     },
     "timestamp": {
@@ -151,23 +151,46 @@
     },
     {
       "title": "GenerationLineage (SessionStart 轨道 · 跨 session 续接旁路, §10.1)",
-      "description": "SessionStart hook / Breather 自助追加的 lineage 行, 落 <log_base>/generations.jsonl (base 根, 非 per-event <project>/YYYY-MM-DD.jsonl). {sessionId→generationId} 全局映射的 append-only 源; reader load_generations_map 据此缝合跨 session. 不经 recorder _common() → 无 runId/caller (非工具调用形状).",
+      "description": "SessionStart hook / 外部 writer 自助追加的 lineage 行, 落 <log_base>/generations.jsonl (base 根, 非 per-event <project>/YYYY-MM-DD.jsonl). {sessionId→generationId} 全局映射的 append-only 源; reader load_generations_map 据此缝合跨 session. 不经 recorder _common() → 无 runId/caller (非工具调用形状).",
       "required": ["writer"],
       "properties": {
         "recordType": { "const": "GenerationLineage" },
         "source": {
           "type": ["string", "null"],
           "enum": ["startup", "resume", "clear", "compact", null],
-          "description": "CC SessionStart payload.source (startup/resume/clear/compact); null = Breather 写 (无 source) 或 payload 缺."
+          "description": "CC SessionStart payload.source (startup/resume/clear/compact); null = 外部 writer 写 (无 source) 或 payload 缺."
         },
         "writer": {
           "type": "string",
-          "enum": ["plugin-hook", "breather"],
-          "description": "行生产者: plugin-hook = 本插件 SessionStart hook; breather = 外部编排 (Breather) 自助写 (§10.1, 可带 prevSessionId 有序链)."
+          "enum": ["plugin-hook", "external"],
+          "description": "行生产者: plugin-hook = 本插件 SessionStart hook; external = 外部动作层 (handoff 工具) 自助写 (§10.1, 可带 prevSessionId 有序链)."
         },
         "prevSessionId": {
           "type": ["string", "null"],
-          "description": "可选 (Breather 写): 有序链 / wall-clock gap 续接. plugin-hook 不落; reader 读到就用."
+          "description": "可选 (外部 writer 写): 有序链 / wall-clock gap 续接. plugin-hook 不落; reader 读到就用."
+        }
+      }
+    },
+    {
+      "title": "BudgetEvent (实时预算事件 emission · opt-in, §10)",
+      "description": "Agent 轨 write_record 后, 配了 AGENTINSIGHT_BUDGET_THRESHOLD 才算+发的实时预算事件, 落 <log_base>/budget-events.jsonl (base 根, 外部动作层全局订阅面). per-session 实时累计 (对应外部 handoff 动作层的 per-session handoff 语义); 配了 AGENTINSIGHT_BUDGET_WEBHOOK 才额外 POST. 不经 recorder _common() → 无 runId/caller.",
+      "required": ["cumulativeTotal", "threshold", "exceeded"],
+      "properties": {
+        "recordType": { "const": "BudgetEvent" },
+        "cumulativeTotal": { "type": "integer", "description": "本 session SubagentCall 累计 grandTotal.total (cacheRead-inclusive, 红线 6; budget._session_cumulative)." },
+        "threshold": { "type": "integer", "description": "AGENTINSIGHT_BUDGET_THRESHOLD 配的 token 阈值." },
+        "pctOfThreshold": { "type": "number", "description": "cumulativeTotal / threshold * 100 (取整, 镜像 cacheReadPct 口径)." },
+        "exceeded": { "type": "boolean", "description": "到阈即超 (cumulativeTotal >= threshold) — 外部 handoff 工具触发判据." },
+        "tokens": {
+          "type": "object",
+          "description": "四桶明细 (诊断, cacheRead-inclusive).",
+          "properties": {
+            "input": { "type": ["integer", "null"] },
+            "output": { "type": ["integer", "null"] },
+            "cacheCreation": { "type": ["integer", "null"] },
+            "cacheRead": { "type": ["integer", "null"] },
+            "total": { "type": ["integer", "null"] }
+          }
         }
       }
     }

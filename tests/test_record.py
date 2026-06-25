@@ -77,6 +77,19 @@ def read_lineage():
     return rows
 
 
+def read_budget_events():
+    """读 TMP/budget-events.jsonl (base 根, 外部动作层订阅面, §10). 返回行列表."""
+    path = os.path.join(TMP, "budget-events.jsonl")
+    rows = []
+    if os.path.exists(path):
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    rows.append(json.loads(line))
+    return rows
+
+
 def run_record_proc(payload, carriers=None, extra=None):
     """隔离 env 调 record.py, 返回完整 process (含 .returncode/.stdout). 供 stdout 断言用 (组13)."""
     env = {"AGENTINSIGHT_LOG_DIR": TMP, "PATH": os.environ.get("PATH", "")}
@@ -345,6 +358,55 @@ p = run_record_proc({"hook_event_name": "SessionStart", "session_id": "s-stdout"
 check("SessionStart: stdout 空 (不注 additionalContext, 红线 2)", p.stdout.strip() == "", repr(p.stdout))
 check("SessionStart: exit 0", p.returncode == 0, p.returncode)
 check("SessionStart: lineage 仍落 (副作用生效)", len(read_lineage()) == 1, len(read_lineage()))
+
+# ===== 组14 实时预算事件 emission (opt-in §10, 2026-06-24) =====
+print("\n[组14] 实时预算事件 emission — opt-in (threshold 配了才发) + 仅 Agent 轨")
+reset()
+# 14a 没配 threshold → 不发 emission (inert, 红线 2)
+run_record({"tool_name": "Agent", "session_id": "s-bud", "cwd": "/p",
+            "tool_input": {"subagent_type": "x"},
+            "tool_response": {"status": "completed", "agentId": "a", "agentType": "x",
+                              "totalTokens": 500, "usage": {"input_tokens": 400, "output_tokens": 100}}})
+check("14a 没配 threshold: budget-events.jsonl 不存在 (opt-in)",
+      not os.path.exists(os.path.join(TMP, "budget-events.jsonl")))
+# 14b 配 threshold + Agent → 落 BudgetEvent
+reset()
+run_record({"tool_name": "Agent", "session_id": "s-bud", "cwd": "/p",
+            "tool_input": {"subagent_type": "x"},
+            "tool_response": {"status": "completed", "agentId": "a", "agentType": "x",
+                              "totalTokens": 500, "usage": {"input_tokens": 400, "output_tokens": 100}}},
+           extra={"AGENTINSIGHT_BUDGET_THRESHOLD": "1000"})
+evs = read_budget_events()
+check("14b 配 threshold: budget-events.jsonl 1 条", len(evs) == 1, len(evs))
+e = evs[0] if evs else {}
+check("14b recordType=BudgetEvent", e.get("recordType") == "BudgetEvent", e.get("recordType"))
+check("14b cumulativeTotal=500 (本 session 累计)", e.get("cumulativeTotal") == 500, e.get("cumulativeTotal"))
+check("14b threshold=1000", e.get("threshold") == 1000, e.get("threshold"))
+check("14b pctOfThreshold=50.0", e.get("pctOfThreshold") == 50.0, e.get("pctOfThreshold"))
+check("14b exceeded=False (500<1000)", e.get("exceeded") is False, e.get("exceeded"))
+check("14b sessionId=s-bud", e.get("sessionId") == "s-bud", e.get("sessionId"))
+check("14b tokens 四桶带回 (input=400)", e.get("tokens", {}).get("input") == 400, e.get("tokens"))
+# 14c 第二条 Agent → 累计翻倍 + 到阈即超 (per-session 实时累计)
+run_record({"tool_name": "Agent", "session_id": "s-bud", "cwd": "/p",
+            "tool_input": {"subagent_type": "x"},
+            "tool_response": {"status": "completed", "agentId": "b", "agentType": "x",
+                              "totalTokens": 500, "usage": {"input_tokens": 400, "output_tokens": 100}}},
+           extra={"AGENTINSIGHT_BUDGET_THRESHOLD": "1000"})
+evs = read_budget_events()
+check("14c 第二条 Agent 后: budget-events 共 2 条 (每 Agent 触发一次)", len(evs) == 2, len(evs))
+e2 = evs[-1] if evs else {}
+check("14c 第二条 cumulativeTotal=1000 (累计翻倍)", e2.get("cumulativeTotal") == 1000, e2.get("cumulativeTotal"))
+check("14c 第二条 exceeded=True (到阈即超 1000>=1000)", e2.get("exceeded") is True, e2.get("exceeded"))
+check("14c 第二条 pctOfThreshold=100.0", e2.get("pctOfThreshold") == 100.0, e2.get("pctOfThreshold"))
+# 14d Skill 轨不发 emission (token 在 Agent 轨)
+reset()
+run_record({"tool_name": "Skill", "session_id": "s-skill", "cwd": "/p",
+            "agent_id": "arch", "tool_input": {"skill": "x"},
+            "tool_response": {"success": True, "commandName": "x"}},
+           extra={"AGENTINSIGHT_BUDGET_THRESHOLD": "1000"})
+check("14d Skill 轨: 不发 emission (budget-events 不存在)",
+      not os.path.exists(os.path.join(TMP, "budget-events.jsonl")))
+# 14e emission 不阻断编排: budget 模块炸了也不影响落盘 (红线 1 — 难造, 跳过; 已由 try/except 兜)
 
 # ===== 收尾 =====
 print("\n" + "=" * 70)
