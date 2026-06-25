@@ -444,7 +444,7 @@ check("--watch 循环期无 argparse usage 错", "usage:" not in pw.stderr, pw.s
 shutil.rmtree(wd, ignore_errors=True)
 
 # ===== 组14 · Phase 3 load_generations_map (§10.1 lineage 载入, inert-safe 纯函数) =====
-print("\n[组14] load_generations_map — 缺文件/坏行/Breather 形/last-writer-wins 容错")
+print("\n[组14] load_generations_map — 缺文件/坏行/external 形/last-writer-wins 容错")
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import analyze as _az   # 直接 import 测纯函数 (subprocess 跑 CLI 见组1-13); analyze import 已含 try/except 守卫
 _gd = tempfile.mkdtemp(prefix="obs-gen-")
@@ -470,16 +470,16 @@ with open(_gp, "w") as f:
 m, raw = _az.load_generations_map(log_base=_gd)
 check("坏行跳过不抛: 只 s3/s4 进 map", m == {"s3": "g3", "s4": "g4"}, m)
 check("坏行跳过: raw 只含 2 好行 dict", len(raw) == 2, len(raw))
-# 14d Breather 形 (ts/prevSessionId/writer=breather) 容错 — reader 不要求 plugin-hook
+# 14d external 形 (ts/prevSessionId/writer=external) 容错 — reader 不要求 plugin-hook
 with open(_gp, "w") as f:
-    f.write(json.dumps({"generationId": "gB", "sessionId": "sB", "writer": "breather",
+    f.write(json.dumps({"generationId": "gB", "sessionId": "sB", "writer": "external",
                         "ts": "2026-06-22T10:00:00Z", "prevSessionId": "sA"}) + "\n")
 m, raw = _az.load_generations_map(log_base=_gd)
-check("Breather 形 (ts/prevSessionId/writer=breather) 容错", m == {"sB": "gB"}, m)
-# 14e last-writer-wins: 同 sid 两行, 后盖前 (Breather 应盖 plugin-hook)
+check("external 形 (ts/prevSessionId/writer=external) 容错", m == {"sB": "gB"}, m)
+# 14e last-writer-wins: 同 sid 两行, 后盖前 (external 应盖 plugin-hook)
 with open(_gp, "w") as f:
     f.write(json.dumps({"sessionId": "sX", "generationId": "g-old", "writer": "plugin-hook"}) + "\n")
-    f.write(json.dumps({"sessionId": "sX", "generationId": "g-new", "writer": "breather"}) + "\n")
+    f.write(json.dumps({"sessionId": "sX", "generationId": "g-new", "writer": "external"}) + "\n")
 m, _r = _az.load_generations_map(log_base=_gd)
 check("last-writer-wins: 同 sid 后写盖前", m.get("sX") == "g-new", m)
 shutil.rmtree(_gd, ignore_errors=True)

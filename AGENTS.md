@@ -44,7 +44,7 @@
 ## 跨 session 续接(lineage 缝合已交付)
 
 - `generationId = effective_id`(carrier ? carrier : sessionId)。recorder 盖章 + reader 缝合(lineage)均已交付;carrier 走 `AGENTINSIGHT_CARRIER_ID`(env)或 `AGENTINSIGHT_CARRIER_FILE`(handoff 文件),二选一、env 优先,未设则退化成 `sessionId`。
-- lineage 缝合链路:SessionStart hook 写 `<log_base>/generations.jsonl`(base 根、跨 project 全局 `{sessionId→generationId}` 表)→ reader `load_generations_map` 读它 → `_apply_generation_map` 把 Mode B 记录 generationId post-ingest 覆盖 → `aggregate_generations` 按 generationId 卷 perSession 成 `result.generations`(multiSession 聚合);dashboard fleet 行带 gen-tag +「按 generation 分组」(默认关)。budgetState 跨 session persist 仍 defer。foreign session(没开本插件 hook)的离线续接须上层在 handoff 时落 lineage(最小契约 `{generationId, sessionId, ts}`,reader 亦兼容 breather writer),不落则 foreign 档离线缝不上、但不崩。
+- lineage 缝合链路:SessionStart hook 写 `<log_base>/generations.jsonl`(base 根、跨 project 全局 `{sessionId→generationId}` 表)→ reader `load_generations_map` 读它 → `_apply_generation_map` 把 Mode B 记录 generationId post-ingest 覆盖 → `aggregate_generations` 按 generationId 卷 perSession 成 `result.generations`(multiSession 聚合);dashboard fleet 行带 gen-tag +「按 generation 分组」(默认关)。budgetState 跨 session persist 仍 defer。foreign session(没开本插件 hook)的离线续接须上层在 handoff 时落 lineage(最小契约 `{generationId, sessionId, ts}`,reader 亦兼容 external writer),不落则 foreign 档离线缝不上、但不崩。
 - 续接机制是纯新设计——无先例兜底,唯一背书 = 已验证原型 + documented CC 原语。
 
 ## F 实证发现

@@ -59,6 +59,12 @@ try:
 except ImportError:
     _terminal_stats = None
 
+try:
+    from budget import _budget_threshold, _budget_state   # 预算判定单一源头 (2026-06-24 抽离; reader 离线 + recorder 实时 emission 共用, 见 budget.py)
+except ImportError:
+    _budget_threshold = lambda: None
+    _budget_state = lambda cumulative, threshold: None
+
 DEFAULT_LOGDIR = os.path.expanduser("~/.claude/agent-insight")
 DEFAULT_PROJECTS = os.path.expanduser("~/.claude/projects")
 _TOK_KEYS = ["input", "output", "cacheCreation", "cacheRead", "total"]
@@ -638,8 +644,8 @@ def load_generations_map(log_base=None):
 
     缺文件/坏目录 → ({}, []); 坏行逐行 try/except 跳 (镜像 _load_jsonl_file 的 per-line 容错); 非 dict 跳.
     log_base 默认走 record.py _log_base 同优先级 (AGENTINSIGHT_LOG_DIR > ~/.claude/agent-insight; 不认 CLAUDE_PLUGIN_DATA, 2026-06-23 修断链).
-    last-writer-wins: 同 sessionId 多行后写覆盖前 (Breather 行更知真实 handoff 图, 应盖 plugin-hook 行).
-    reader 只取 sessionId/generationId; timestamp(plugin-hook)/ts(Breather)/prevSessionId 读到不参与."""
+    last-writer-wins: 同 sessionId 多行后写覆盖前 (外部 writer 行更知真实 handoff 图, 应盖 plugin-hook 行).
+    reader 只取 sessionId/generationId; timestamp(plugin-hook)/ts(external writer)/prevSessionId 读到不参与."""
     base = log_base or (os.environ.get("AGENTINSIGHT_LOG_DIR", "").strip()
                         or os.path.expanduser("~/.claude/agent-insight"))
     path = os.path.join(base, "generations.jsonl")
@@ -688,35 +694,8 @@ def _apply_generation_map(records, mapping):
                     r["carrierSource"] = "lineage-map"
 
 
-def _budget_threshold():
-    """读 AGENTINSIGHT_BUDGET_THRESHOLD env (token int, opt-in). 空/非数字/0 → None (inert, 不算预算).
-
-    镜像既有 AGENTINSIGHT_* 读取模式 (load_generations_map / _reconcile_live_records 的 os.environ.get(...).strip()).
-    0 → None (零阈值无意义; 下游 _budget_state 亦以 truthiness 复核, 双保险)."""
-    raw = os.environ.get("AGENTINSIGHT_BUDGET_THRESHOLD", "").strip()
-    if not raw:
-        return None
-    try:
-        val = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return val or None
-
-
-def _budget_state(cumulative, threshold):
-    """预算判定 (单一源头, reader-computes; 未来 Breather seam 复用此函数, 缺口 1).
-
-    cumulative = generation 跨 session 卷起的 grandTotal.total (cacheRead-inclusive, 红线 6).
-    threshold=None → None (inert: 不加 budgetState key, 逐字今天行为). pct 取整镜像 cacheReadPct 口径.
-    exceeded = 到阈即超 (cumulative >= threshold)."""
-    if not threshold:
-        return None
-    return {
-        "threshold": threshold,
-        "cumulativeTotal": cumulative,
-        "pctOfThreshold": round(cumulative / threshold * 100, 1),
-        "exceeded": cumulative >= threshold,
-    }
+# _budget_threshold / _budget_state 已抽至 tools/budget.py (2026-06-24, reader 离线 + recorder 实时 emission 单一源头).
+# 顶部 from budget import _budget_threshold, _budget_state (try/except inert fallback).
 
 
 def aggregate_generations(per_session_rows, threshold=None):
